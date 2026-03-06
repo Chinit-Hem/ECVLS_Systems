@@ -292,9 +292,12 @@ export function toVehicle(dbVehicle: VehicleDB): Record<string, unknown> {
     ? parseFloat(dbVehicle.market_price) 
     : (dbVehicle.market_price || 0);
   
+  // Normalize category to match the stats format
+  const normalizedCategory = normalizeCategory(dbVehicle.category);
+  
   return {
     VehicleId: String(dbVehicle.id),
-    Category: dbVehicle.category,
+    Category: normalizedCategory,
     Brand: dbVehicle.brand,
     Model: dbVehicle.model,
     Year: dbVehicle.year,

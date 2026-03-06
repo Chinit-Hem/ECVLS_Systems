@@ -132,7 +132,7 @@ type VehicleFilters = {
 };
 
 const CATEGORY_OPTIONS: SelectOption[] = [
-  { label: "Cars", value: "Cars" },
+  { label: "Cars", value: "Car" },
   { label: "Motorcycles", value: "Motorcycles" },
   { label: "Tuk Tuk", value: "Tuk Tuk" },
 ];

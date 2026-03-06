@@ -1,9 +1,9 @@
 "use client";
 
-import type { User } from "@/lib/types";
+import type { User, VehicleMeta } from "@/lib/types";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 function normalizeCategory(value: unknown) {
   return String(value ?? "").trim().toLowerCase();
@@ -309,6 +309,51 @@ export default function Sidebar({ user, onNavigate }: SidebarProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const [meta, setMeta] = useState<VehicleMeta | null>(null);
+
+  // Fetch meta data for category counts
+  useEffect(() => {
+    async function fetchMeta() {
+      try {
+        // Check cache version first
+        const cacheVersion = localStorage.getItem("vms-vehicles-version");
+        if (cacheVersion === "2") {
+          const cachedMeta = localStorage.getItem("vms-vehicles-meta");
+          if (cachedMeta) {
+            setMeta(JSON.parse(cachedMeta));
+            return;
+          }
+        }
+        
+        // Fetch fresh data if no valid cache
+        const res = await fetch("/api/vehicles?noCache=1", { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.meta) {
+            setMeta(data.meta);
+            // Save to localStorage
+            localStorage.setItem("vms-vehicles-meta", JSON.stringify(data.meta));
+            localStorage.setItem("vms-vehicles-version", "2");
+          }
+        }
+      } catch (err) {
+        console.error("[Sidebar] Failed to fetch meta:", err);
+      }
+    }
+    
+    fetchMeta();
+    
+    // Listen for storage changes (when Dashboard updates cache)
+    const handleStorageChange = () => {
+      const cachedMeta = localStorage.getItem("vms-vehicles-meta");
+      if (cachedMeta) {
+        setMeta(JSON.parse(cachedMeta));
+      }
+    };
+    
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, []);
 
   const isAdmin = user.role === "Admin";
 
@@ -330,6 +375,12 @@ export default function Sidebar({ user, onNavigate }: SidebarProps) {
     router.push(href);
     onNavigate?.();
   };
+
+  // Get counts from meta
+  const allVehiclesCount = meta?.total ?? 0;
+  const carsCount = meta?.countsByCategory?.Car ?? 0;
+  const motorcyclesCount = meta?.countsByCategory?.Motorcycles ?? 0;
+  const tukTuksCount = meta?.countsByCategory?.["Tuk Tuk"] ?? 0;
 
   return (
     <aside className="ec-sidebar w-[280px] h-screen overflow-y-auto flex flex-col print:hidden relative z-[50]">
@@ -405,6 +456,7 @@ export default function Sidebar({ user, onNavigate }: SidebarProps) {
             active={isAllVehiclesActive}
             onClick={() => handleNavigate("/vehicles")}
             subItem
+            count={allVehiclesCount}
           />
           <NavItem
             href="/vehicles?category=Cars"
@@ -413,6 +465,7 @@ export default function Sidebar({ user, onNavigate }: SidebarProps) {
             active={isCarsActive}
             onClick={() => handleNavigate("/vehicles?category=Cars")}
             subItem
+            count={carsCount}
           />
           <NavItem
             href="/vehicles?category=Motorcycles"
@@ -421,6 +474,7 @@ export default function Sidebar({ user, onNavigate }: SidebarProps) {
             active={isMotorcyclesActive}
             onClick={() => handleNavigate("/vehicles?category=Motorcycles")}
             subItem
+            count={motorcyclesCount}
           />
           <NavItem
             href="/vehicles?category=Tuk+Tuk"
@@ -429,6 +483,7 @@ export default function Sidebar({ user, onNavigate }: SidebarProps) {
             active={isTukTuksActive}
             onClick={() => handleNavigate("/vehicles?category=Tuk+Tuk")}
             subItem
+            count={tukTuksCount}
           />
           {isAdmin && (
             <NavItem

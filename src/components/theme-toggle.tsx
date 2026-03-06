@@ -65,7 +65,7 @@ export default function ThemeToggle({ className = "" }: { className?: string }) 
         <div
           role="menu"
           aria-label="Theme mode"
-          className="absolute right-0 z-[120] mt-2 w-44 rounded-xl border border-[var(--glass-border)] bg-[var(--bg-elevated)] p-1.5 shadow-[var(--shadow-elevated)] backdrop-blur-xl"
+          className="absolute right-0 z-[9999] mt-2 w-44 rounded-xl border border-[var(--glass-border)] bg-[var(--bg-elevated)] p-1.5 shadow-[var(--shadow-elevated)] backdrop-blur-xl"
         >
           {themeOptions.map(({ value, label, Icon }) => {
             const selected = mode === value;

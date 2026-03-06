@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, Suspense, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import ThemeToggle from "@/app/components/ThemeToggle";
 import { GlassButton } from "@/app/components/ui/GlassButton";
 
 function LoginForm() {
@@ -144,11 +143,6 @@ function LoginForm() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-50 via-white to-emerald-50/40 p-4 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-      {/* Theme Toggle in top right */}
-      <div className="absolute top-4 right-4 z-20">
-        <ThemeToggle />
-      </div>
-
       {/* Animated Background */}
       <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
         <div className="absolute left-0 top-0 h-[520px] w-[520px] rounded-full bg-gradient-to-br from-emerald-400/12 via-emerald-500/6 to-transparent blur-3xl dark:from-emerald-500/10 dark:via-transparent animate-float-slow" />

@@ -6,7 +6,6 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import { clearCachedUser } from "@/app/components/authCache";
 import { useAuthUser } from "@/app/components/AuthContext";
-import ThemeToggle from "@/app/components/ThemeToggle";
 import type { Role } from "@/lib/types";
 
 type ManagedUser = {
@@ -180,18 +179,6 @@ export default function SettingsPage() {
           </p>
 
           <div className="mt-6 space-y-4">
-            <div className="rounded-xl border border-slate-200/80 bg-white/90 p-4 dark:border-slate-700 dark:bg-slate-900/95">
-              <p className="text-sm font-semibold text-slate-900 dark:text-white">
-                Dark Mode
-              </p>
-              <p className="mt-1 text-xs text-slate-600 dark:text-slate-100">
-                Change app theme for this device.
-              </p>
-              <div className="mt-3">
-                <ThemeToggle />
-              </div>
-            </div>
-
             {isAdmin ? (
               <div className="rounded-xl border border-emerald-200/70 bg-emerald-50/50 p-4 dark:border-emerald-500/45 dark:bg-slate-900/95">
                 <p className="text-sm font-semibold text-slate-900 dark:text-white">

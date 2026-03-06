@@ -2,7 +2,6 @@
 
 import { useAuthUser } from "@/app/components/AuthContext";
 import { GlassButton } from "@/app/components/ui/GlassButton";
-import ThemeToggle from "@/app/components/ThemeToggle";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -63,7 +62,6 @@ export default function DashboardHeader() {
                 {user.role}
               </p>
             </div>
-            <ThemeToggle />
             <GlassButton
               variant="secondary"
               size="sm"

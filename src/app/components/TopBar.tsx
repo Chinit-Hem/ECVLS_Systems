@@ -5,7 +5,6 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import React from "react";
 
-import ThemeToggle from "@/app/components/ThemeToggle";
 import { GlassButton } from "@/app/components/ui/GlassButton";
 
 type TopBarProps = {
@@ -117,7 +116,6 @@ export default function TopBar({
           <div className="hidden md:block text-xs text-gray-600 dark:text-gray-400 truncate max-w-[150px]">
             {user.role}: {user.username}
           </div>
-          <ThemeToggle className="hidden sm:inline-flex p-2 touch-target" />
         </div>
       </div>
     </header>

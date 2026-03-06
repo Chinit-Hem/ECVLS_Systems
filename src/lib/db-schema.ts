@@ -180,6 +180,23 @@ export async function deleteVehicle(id: number): Promise<boolean> {
 }
 
 
+// Normalize condition to proper case
+function normalizeCondition(condition: string): "New" | "Used" | "Other" {
+  const lower = condition?.toLowerCase().trim();
+  if (lower === "new") return "New";
+  if (lower === "used") return "Used";
+  return "Other";
+}
+
+// Normalize category to standard format
+function normalizeCategory(category: string): string {
+  const lower = category?.toLowerCase().trim();
+  if (lower === "car" || lower === "cars") return "Car";
+  if (lower === "motorcycle" || lower === "motorcycles") return "Motorcycles";
+  if (lower === "tuk tuk" || lower === "tuktuk" || lower === "tuk-tuk" || lower === "tuktuks") return "Tuk Tuk";
+  return category?.trim() || "Other";
+}
+
 // Get vehicle statistics
 export async function getVehicleStats(): Promise<{
   total: number;
@@ -195,18 +212,26 @@ export async function getVehicleStats(): Promise<{
     FROM cleaned_vehicles_for_google_sheets 
     GROUP BY category
   `;
-  const byCategory = Object.fromEntries(
-    byCategoryResult.map(r => [r.category, parseInt(r.count)])
-  );
+  
+  // Merge counts by normalized category to avoid duplicates
+  const byCategory: Record<string, number> = {};
+  for (const row of byCategoryResult) {
+    const normalized = normalizeCategory(row.category);
+    byCategory[normalized] = (byCategory[normalized] || 0) + parseInt(row.count);
+  }
   
   const byConditionResult = await sql`
     SELECT condition, COUNT(*) as count 
     FROM cleaned_vehicles_for_google_sheets 
     GROUP BY condition
   `;
-  const byCondition = Object.fromEntries(
-    byConditionResult.map(r => [r.condition, parseInt(r.count)])
-  );
+  
+  // Merge counts by normalized condition to avoid duplicates
+  const byCondition: Record<string, number> = { New: 0, Used: 0, Other: 0 };
+  for (const row of byConditionResult) {
+    const normalized = normalizeCondition(row.condition);
+    byCondition[normalized] += parseInt(row.count);
+  }
   
   const avgPriceResult = await sql`
     SELECT AVG(market_price) as avg_price 

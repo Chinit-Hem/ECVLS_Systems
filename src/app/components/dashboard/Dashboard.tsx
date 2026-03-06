@@ -275,32 +275,15 @@ export default function Dashboard() {
 
   // Use server-provided meta for counts to ensure consistency with table
   const kpis = useMemo(() => {
-    // Helper to safely get category count from meta with various key formats
-    const getCategoryCount = (metaObj: VehicleMeta | null, ...possibleKeys: string[]): number => {
-      if (!metaObj?.countsByCategory) return 0;
-      const counts = metaObj.countsByCategory;
-      
-      // Try each possible key in order
-      for (const key of possibleKeys) {
-        // Try exact match
-        if (counts[key] !== undefined) return counts[key];
-        // Try case-insensitive match
-        const foundKey = Object.keys(counts).find(k => k.toLowerCase() === key.toLowerCase());
-        if (foundKey) return counts[foundKey];
-      }
-      return 0;
-    };
-
     // If we have meta from server, use it for counts (single source of truth)
     if (meta) {
       const stats = marketPriceStats(vehicles);
       return {
         total: meta.total ?? vehicles.length,
-        // API returns "Car", we need to check for both "Car" and "Cars"
-        cars: getCategoryCount(meta, "Car", "Cars"),
-        // API returns both "Motorcycles" and "Motorcycle"
-        motorcycles: getCategoryCount(meta, "Motorcycles", "Motorcycle"),
-        tukTuk: getCategoryCount(meta, "Tuk Tuk", "TukTuks"),
+        // API now returns normalized category names
+        cars: meta.countsByCategory?.Car ?? 0,
+        motorcycles: meta.countsByCategory?.Motorcycles ?? 0,
+        tukTuk: meta.countsByCategory?.["Tuk Tuk"] ?? 0,
         newCount: meta.countsByCondition?.New ?? 0,
         usedCount: meta.countsByCondition?.Used ?? 0,
         noImagesCount: meta.noImageCount ?? 0,

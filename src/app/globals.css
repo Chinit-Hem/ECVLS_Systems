@@ -5346,3 +5346,87 @@ body {
     }
   }
 }
+
+/* ---------------- EMERGENCY FIX: Force All Text Visible in Dark Mode ---------------- */
+
+/* Force ALL text elements to be light in dark mode */
+.dark,
+:root[data-theme="dark"] {
+  color: var(--text) !important;
+}
+
+.dark *,
+:root[data-theme="dark"] * {
+  color: inherit !important;
+}
+
+/* But allow specific color overrides */
+.dark [class*="text-"],
+:root[data-theme="dark"] [class*="text-"] {
+  color: inherit !important;
+}
+
+/* Force specific text colors for common Tailwind classes in dark mode */
+.dark .text-gray-900,
+.dark .text-gray-800,
+.dark .text-gray-700,
+.dark .text-gray-600,
+.dark .text-gray-500,
+.dark .text-slate-900,
+.dark .text-slate-800,
+.dark .text-slate-700,
+.dark .text-slate-600,
+.dark .text-slate-500,
+.dark .text-black,
+:root[data-theme="dark"] .text-gray-900,
+:root[data-theme="dark"] .text-gray-800,
+:root[data-theme="dark"] .text-gray-700,
+:root[data-theme="dark"] .text-gray-600,
+:root[data-theme="dark"] .text-gray-500,
+:root[data-theme="dark"] .text-slate-900,
+:root[data-theme="dark"] .text-slate-800,
+:root[data-theme="dark"] .text-slate-700,
+:root[data-theme="dark"] .text-slate-600,
+:root[data-theme="dark"] .text-slate-500,
+:root[data-theme="dark"] .text-black {
+  color: var(--text) !important;
+}
+
+/* Force all headings, paragraphs, spans, labels to be visible */
+.dark h1, .dark h2, .dark h3, .dark h4, .dark h5, .dark h6,
+.dark p, .dark span, .dark label, .dark div, .dark a,
+.dark button, .dark input, .dark textarea, .dark select,
+.dark li, .dark td, .dark th,
+:root[data-theme="dark"] h1, :root[data-theme="dark"] h2, :root[data-theme="dark"] h3,
+:root[data-theme="dark"] h4, :root[data-theme="dark"] h5, :root[data-theme="dark"] h6,
+:root[data-theme="dark"] p, :root[data-theme="dark"] span, :root[data-theme="dark"] label,
+:root[data-theme="dark"] div, :root[data-theme="dark"] a, :root[data-theme="dark"] button,
+:root[data-theme="dark"] input, :root[data-theme="dark"] textarea, :root[data-theme="dark"] select,
+:root[data-theme="dark"] li, :root[data-theme="dark"] td, :root[data-theme="dark"] th {
+  color: var(--text) !important;
+}
+
+/* Exception: keep muted text muted */
+.dark .text-gray-400, .dark .text-gray-300, .dark .text-slate-400, .dark .text-slate-300,
+.dark .text-muted, .dark [class*="muted"],
+:root[data-theme="dark"] .text-gray-400, :root[data-theme="dark"] .text-gray-300,
+:root[data-theme="dark"] .text-slate-400, :root[data-theme="dark"] .text-slate-300,
+:root[data-theme="dark"] .text-muted, :root[data-theme="dark"] [class*="muted"] {
+  color: var(--muted) !important;
+}
+
+/* Exception: keep primary colored text */
+.dark .text-primary, .dark .text-emerald-500, .dark .text-emerald-600,
+.dark .text-green-500, .dark .text-green-600,
+:root[data-theme="dark"] .text-primary, :root[data-theme="dark"] .text-emerald-500,
+:root[data-theme="dark"] .text-emerald-600, :root[data-theme="dark"] .text-green-500,
+:root[data-theme="dark"] .text-green-600 {
+  color: var(--primary) !important;
+}
+
+/* Exception: keep danger colored text */
+.dark .text-danger, .dark .text-red-500, .dark .text-red-600,
+:root[data-theme="dark"] .text-danger, :root[data-theme="dark"] .text-red-500,
+:root[data-theme="dark"] .text-red-600 {
+  color: var(--danger) !important;
+}

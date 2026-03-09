@@ -3879,8 +3879,17 @@ body::before {
 :root[data-theme="dark"] .text-gray-900,
 :root[data-theme="dark"] .text-gray-800,
 :root[data-theme="dark"] .text-gray-700,
-:root[data-theme="dark"] .text-black {
-  color: var(--text);
+:root[data-theme="dark"] .text-black,
+/* Force all dark text classes to be light in dark mode */
+.dark [class*="text-slate-9"],
+.dark [class*="text-gray-9"],
+.dark [class*="text-gray-8"],
+.dark [class*="text-black"],
+:root[data-theme="dark"] [class*="text-slate-9"],
+:root[data-theme="dark"] [class*="text-gray-9"],
+:root[data-theme="dark"] [class*="text-gray-8"],
+:root[data-theme="dark"] [class*="text-black"] {
+  color: var(--text) !important;
 }
 
 .dark .text-slate-600,

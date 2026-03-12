@@ -1,16 +1,16 @@
 // Cloudinary folder mapping for vehicle categories
-// Using vms/ prefix structure: vms/cars, vms/motorcycles, vms/tuktuks
+// Using direct folder structure: Cars, Motorcycles, TukTuks
 
 export const CLOUDINARY_FOLDERS = {
-  CARS: "vms/cars",
-  MOTORCYCLES: "vms/motorcycles",
-  TUKTUKS: "vms/tuktuks",
+  CARS: "Cars",
+  MOTORCYCLES: "Motorcycles",
+  TUKTUKS: "TukTuks",
 } as const;
 
 /**
  * Get the correct Cloudinary folder based on vehicle category
  * @param category - Vehicle category (e.g., "SUV", "Car", "Motorcycle", "TukTuk")
- * @returns Folder path for Cloudinary upload (e.g., "vms/cars", "vms/motorcycles", "vms/tuktuks")
+ * @returns Folder path for Cloudinary upload (e.g., "Cars", "Motorcycles", "TukTuks")
  */
 export function getCloudinaryFolder(category: string): string {
   const cat = category.toLowerCase().trim();
@@ -44,7 +44,7 @@ export function getCloudinaryFolder(category: string): string {
  * Maps vehicle categories to Cloudinary folder paths
  */
 export const CATEGORY_MAPPING: Record<string, string> = {
-  // Cars -> vms/cars
+  // Cars -> Cars
   "suv": CLOUDINARY_FOLDERS.CARS,
   "car": CLOUDINARY_FOLDERS.CARS,
   "sedan": CLOUDINARY_FOLDERS.CARS,
@@ -57,7 +57,7 @@ export const CATEGORY_MAPPING: Record<string, string> = {
   "convertible": CLOUDINARY_FOLDERS.CARS,
   "jeep": CLOUDINARY_FOLDERS.CARS,
   
-  // Motorcycles -> vms/motorcycles
+  // Motorcycles -> Motorcycles
   "motorcycle": CLOUDINARY_FOLDERS.MOTORCYCLES,
   "motorbike": CLOUDINARY_FOLDERS.MOTORCYCLES,
   "scooter": CLOUDINARY_FOLDERS.MOTORCYCLES,
@@ -65,7 +65,7 @@ export const CATEGORY_MAPPING: Record<string, string> = {
   "dirt bike": CLOUDINARY_FOLDERS.MOTORCYCLES,
   "sport bike": CLOUDINARY_FOLDERS.MOTORCYCLES,
   
-  // TukTuks -> vms/tuktuks
+  // TukTuks -> TukTuks
   "tuktuk": CLOUDINARY_FOLDERS.TUKTUKS,
   "tuk-tuk": CLOUDINARY_FOLDERS.TUKTUKS,
   "auto rickshaw": CLOUDINARY_FOLDERS.TUKTUKS,

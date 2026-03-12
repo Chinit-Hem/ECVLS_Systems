@@ -1,52 +1,93 @@
+/**
+ * New vs Used Chart
+ * 
+ * Pie chart showing new vs used vehicle distribution.
+ * Uses dynamic import with ssr: false to prevent hydration errors.
+ * 
+ * @module NewVsUsedChart
+ */
+
 "use client";
 
+import dynamic from "next/dynamic";
+import { useEffect, useRef, useState } from "react";
 import type { PieDatum } from "@/lib/analytics";
-import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+
+// Dynamic import with ssr: false to prevent hydration errors
+const RechartsPieChart = dynamic(
+  () => import("./RechartsPieChart").then((mod) => mod.default),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
 
 type NewVsUsedChartProps = {
   data: PieDatum[];
 };
 
+function ChartSkeleton() {
+  return (
+    <div 
+      className="w-full flex items-center justify-center"
+      style={{ height: '300px' }}
+    >
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600"></div>
+    </div>
+  );
+}
+
+// Internal component that receives explicit dimensions
+function RechartsPieChartWithDimensions({ data, width, height }: { data: PieDatum[]; width: number; height: number }) {
+  const RechartsPieChart = dynamic(
+    () => import("./RechartsPieChart").then((mod) => mod.default),
+    { ssr: false }
+  );
+  return <RechartsPieChart data={data} width={width} height={height} />;
+}
+
 export default function NewVsUsedChart({ data }: NewVsUsedChartProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+    if (!containerRef.current) return;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          setDimensions({ width, height });
+        }
+      }
+    });
+
+    resizeObserver.observe(containerRef.current);
+    return () => resizeObserver.disconnect();
+  }, []);
+
   if (data.length === 0) {
-    return <div className="h-[260px] flex items-center justify-center text-sm text-[var(--muted)]">No data</div>;
+    return (
+      <div 
+        className="w-full flex items-center justify-center text-sm text-gray-500 dark:text-gray-400"
+        style={{ height: '300px' }}
+      >
+        No data available
+      </div>
+    );
   }
 
+  const hasValidDimensions = dimensions.width > 0 && dimensions.height > 0;
+
   return (
-    <div className="h-[260px]">
-      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
-        <PieChart>
-          <Pie
-            data={data}
-            dataKey="value"
-            nameKey="name"
-            innerRadius={55}
-            outerRadius={90}
-            paddingAngle={2}
-            stroke="var(--ec-chart-axis)"
-            strokeOpacity={0.18}
-            strokeWidth={1}
-          >
-            {data.map((entry) => (
-              <Cell key={entry.name} fill={entry.color} />
-            ))}
-          </Pie>
-          <Tooltip
-            formatter={(value: unknown) => [String(value), "Vehicles"]}
-            contentStyle={{
-              background: "var(--ec-chart-tooltip-bg)",
-              border: "1px solid var(--ec-chart-tooltip-border)",
-              borderRadius: "12px",
-              backdropFilter: "blur(12px)",
-              boxShadow: "0 10px 26px rgba(8, 14, 22, 0.28)",
-              color: "var(--text)",
-            }}
-            labelStyle={{ color: "var(--ec-chart-axis)", fontWeight: 700 }}
-            itemStyle={{ color: "var(--text)" }}
-          />
-          <Legend wrapperStyle={{ color: "var(--ec-chart-axis)", fontSize: 12, fontWeight: 600 }} />
-        </PieChart>
-      </ResponsiveContainer>
+    <div 
+      ref={containerRef}
+      style={{ height: '300px', width: '100%', minHeight: '300px', minWidth: '100%' }}
+    >
+      {isMounted && hasValidDimensions ? (
+        <RechartsPieChartWithDimensions data={data} width={dimensions.width} height={dimensions.height} />
+      ) : (
+        <ChartSkeleton />
+      )}
     </div>
   );
 }

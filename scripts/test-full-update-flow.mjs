@@ -25,7 +25,7 @@ async function testFullUpdateFlow() {
     console.log("🔍 Testing complete vehicle update flow with image...\n");
     
     // 1. Get a test vehicle
-    const vehicles = await sql`SELECT * FROM cleaned_vehicles_for_google_sheets LIMIT 1`;
+    const vehicles = await sql`SELECT * FROM vehicles LIMIT 1`;
     if (vehicles.length === 0) {
       console.error("❌ No vehicles found");
       process.exit(1);
@@ -94,7 +94,7 @@ async function testFullUpdateFlow() {
     }
     
     // 5. Verify in database
-    const verifyResult = await sql`SELECT * FROM cleaned_vehicles_for_google_sheets WHERE id = ${vehicle.id}`;
+    const verifyResult = await sql`SELECT * FROM vehicles WHERE id = ${vehicle.id}`;
     const verifiedVehicle = verifyResult[0];
     
     console.log("\n🔍 Database verification:", {

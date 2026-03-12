@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { compressImage } from "@/lib/compressImage";
+import { compressImage } from "@/lib/clientImageCompression";
+import { getCloudinaryFolder } from "@/lib/cloudinary-folders";
+import { recordMutation } from "@/lib/vehicleCache";
 import type { Vehicle } from "@/lib/types";
 
 interface UseUpdateVehicleOptimisticOptions {
@@ -19,6 +21,202 @@ interface UseUpdateVehicleOptimisticReturn {
   isUpdating: boolean;
 }
 
+// Maximum retry attempts for transient errors
+const MAX_RETRY_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 1000;
+
+// Cloudinary configuration from environment variables
+const CLOUDINARY_CLOUD_NAME = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+const CLOUDINARY_UPLOAD_PRESET = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+
+// Helper function to check Cloudinary configuration
+function checkCloudinaryConfig(): { valid: boolean; missing: string[] } {
+  const missing: string[] = [];
+  
+  if (!CLOUDINARY_CLOUD_NAME || CLOUDINARY_CLOUD_NAME === 'your_cloud_name_here') {
+    missing.push('NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME');
+  }
+  if (!CLOUDINARY_UPLOAD_PRESET || CLOUDINARY_UPLOAD_PRESET === 'your_unsigned_preset_name') {
+    missing.push('NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET');
+  }
+  
+  return {
+    valid: missing.length === 0,
+    missing
+  };
+}
+
+// Helper function to delay
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Helper to check if error is retryable
+const isRetryableError = (error: Error): boolean => {
+  const message = error.message.toLowerCase();
+  const has502 = message.includes('502') || message.includes('[http 502]');
+  const has504 = message.includes('504') || message.includes('[http 504]');
+  const hasTimeout = message.includes('timeout');
+  const hasNetworkError = message.includes('network') || 
+                          message.includes('econnreset') ||
+                          message.includes('econnrefused') ||
+                          message.includes('socket hang up');
+  
+  const statusCode = (error as Error & { statusCode?: number }).statusCode;
+  const isRetryableStatus = statusCode === 502 || statusCode === 504 || statusCode === 503;
+  
+  return has502 || has504 || hasTimeout || hasNetworkError || isRetryableStatus;
+};
+
+/**
+ * Upload image file to Cloudinary using unsigned upload preset
+ */
+async function uploadImageToCloudinary(
+  file: File,
+  category: string,
+  vehicleId: string
+): Promise<string> {
+  const config = checkCloudinaryConfig();
+  
+  if (!config.valid) {
+    const missingVars = config.missing.join(', ');
+    const errorMessage = [
+      `Cloudinary configuration error: ${missingVars} not configured.`,
+      '',
+      'To fix this:',
+      '1. Copy .env.local.example to .env.local',
+      '2. Fill in your Cloudinary credentials:',
+      '   - NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME: Your cloud name from https://cloudinary.com/console',
+      '   - NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET: Create an unsigned preset in Cloudinary dashboard',
+      '3. Restart your Next.js dev server',
+      '',
+      'See CLOUDINARY_SETUP_GUIDE.md for detailed instructions.'
+    ].join('\n');
+    
+    console.error('[uploadImageToCloudinary] Configuration error:', errorMessage);
+    throw new Error(errorMessage);
+  }
+
+  const folder = getCloudinaryFolder(category);
+  const publicId = `vehicle_${vehicleId}_${Date.now()}`;
+
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+  formData.append("folder", folder);
+  formData.append("public_id", publicId);
+  formData.append("tags", `vehicle,${category}`);
+
+  const url = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`;
+
+  console.log(`[uploadImageToCloudinary] Uploading to Cloudinary:`, {
+    cloudName: CLOUDINARY_CLOUD_NAME,
+    folder,
+    publicId,
+    fileSize: `${(file.size / 1024).toFixed(2)}KB`,
+  });
+
+  const response = await fetch(url, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = errorData.error?.message || `Upload failed: ${response.status}`;
+    
+    // Enhanced error detection and messaging
+    if (errorMessage.includes('Upload preset not found') || 
+        errorMessage.includes('upload preset') ||
+        errorMessage.includes('preset')) {
+      const enhancedError = new Error([
+        `❌ Cloudinary Upload Preset Error: "${CLOUDINARY_UPLOAD_PRESET}"`,
+        '',
+        'The upload preset was not found in your Cloudinary account.',
+        '',
+        '🔧 To fix this:',
+        '1. Go to Cloudinary Dashboard: https://cloudinary.com/console',
+        '2. Click Settings (gear icon) → Upload',
+        '3. Scroll to "Upload presets" section',
+        '4. Click "Add upload preset" or verify existing preset',
+        '5. Set the preset name to exactly: ' + CLOUDINARY_UPLOAD_PRESET,
+        '6. Set Signing Mode to: UNSIGNED (⚠️ Important!)',
+        '7. Click Save',
+        '8. Restart your Next.js dev server',
+        '',
+        '📚 Full guide: CLOUDINARY_SETUP_GUIDE.md',
+        '',
+        `Original error: ${errorMessage}`
+      ].join('\n'));
+      
+      console.error('[uploadImageToCloudinary] Upload preset error:', {
+        preset: CLOUDINARY_UPLOAD_PRESET,
+        cloudName: CLOUDINARY_CLOUD_NAME,
+        error: errorMessage,
+        errorData
+      });
+      
+      throw enhancedError;
+    }
+    
+    // Check for cloud name errors
+    if (errorMessage.includes('cloud name') || 
+        errorMessage.includes('Cloud name') ||
+        response.status === 401) {
+      const enhancedError = new Error([
+        `❌ Cloudinary Cloud Name Error: "${CLOUDINARY_CLOUD_NAME}"`,
+        '',
+        'The cloud name appears to be invalid or not found.',
+        '',
+        '🔧 To fix this:',
+        '1. Go to Cloudinary Dashboard: https://cloudinary.com/console',
+        '2. Find your Cloud Name at the top of the dashboard',
+        '3. Update NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME in .env.local',
+        '4. Restart your Next.js dev server',
+        '',
+        '📚 Full guide: CLOUDINARY_SETUP_GUIDE.md',
+        '',
+        `Original error: ${errorMessage}`
+      ].join('\n'));
+      
+      console.error('[uploadImageToCloudinary] Cloud name error:', {
+        cloudName: CLOUDINARY_CLOUD_NAME,
+        error: errorMessage,
+        errorData
+      });
+      
+      throw enhancedError;
+    }
+    
+    throw new Error(errorMessage);
+  }
+
+  const result = await response.json();
+  
+  if (!result.secure_url) {
+    throw new Error("Cloudinary response missing secure_url");
+  }
+
+  console.log(`[uploadImageToCloudinary] Success:`, {
+    url: result.secure_url.substring(0, 100) + "...",
+  });
+
+  return result.secure_url;
+}
+
+/**
+ * Convert Base64 string to File object
+ */
+function base64ToFile(base64String: string, filename: string): File {
+  const arr = base64String.split(",");
+  const mime = arr[0].match(/:(.*?);/)?.[1] || "image/jpeg";
+  const bstr = atob(arr[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) {
+    u8arr[n] = bstr.charCodeAt(n);
+  }
+  return new File([u8arr], filename, { type: mime });
+}
+
 export function useUpdateVehicleOptimistic(
   options: UseUpdateVehicleOptimisticOptions = {}
 ): UseUpdateVehicleOptimisticReturn {
@@ -34,63 +232,178 @@ export function useUpdateVehicleOptimistic(
     ): Promise<void> => {
       setIsUpdating(true);
 
+      console.log(`[updateVehicle] Starting update for vehicle ${vehicleId}`, {
+        hasImageFile: !!imageFile,
+        hasImageInData: !!data.Image,
+        imageType: data.Image ? (data.Image.startsWith("data:image/") ? "base64" : "url") : "none",
+      });
+
+      let lastError: Error | null = null;
+      let attempts = 0;
+      let cloudinaryImageUrl: string | null = null;
+
+      // Step 1: Handle image upload to Cloudinary (OUTSIDE retry loop - do this once)
       try {
-        let body: string | FormData;
-        const headers: Record<string, string> = {};
-
+        // Case A: We have a File object from file input
         if (imageFile) {
-          // Use FormData for image uploads
-          const formData = new FormData();
-
-          // Add vehicle data
-          Object.entries(data).forEach(([key, value]) => {
-            if (value != null && key !== "Image") {
-              formData.append(key, String(value));
-            }
-          });
-
-          // Compress and add the image
+          console.log(`[updateVehicle] Compressing image file...`);
+          
           const compressedResult = await compressImage(imageFile, {
             maxWidth: 1280,
             quality: 0.75,
-            targetMinSizeKB: 250,
-            targetMaxSizeKB: 800,
           });
-          formData.append("image", compressedResult.file);
+          
+          console.log(`[updateVehicle] Image compressed:`, {
+            originalSize: `${(imageFile.size / 1024).toFixed(2)}KB`,
+            compressedSize: `${(compressedResult.compressedSize / 1024).toFixed(2)}KB`,
+          });
 
-          body = formData;
-        } else {
-          // Use JSON for non-image updates
-          headers["Content-Type"] = "application/json";
-          body = JSON.stringify(data);
+          console.log(`[updateVehicle] Uploading compressed image to Cloudinary...`);
+          cloudinaryImageUrl = await uploadImageToCloudinary(
+            compressedResult.file,
+            data.Category || originalVehicle.Category || "Cars",
+            vehicleId
+          );
+          
+          console.log(`[updateVehicle] Cloudinary upload complete:`, {
+            url: cloudinaryImageUrl.substring(0, 100) + "...",
+          });
         }
+        // Case B: We have a Base64 string in data.Image
+        else if (data.Image && data.Image.startsWith("data:image/")) {
+          console.log(`[updateVehicle] Converting Base64 to File and uploading to Cloudinary...`);
+          
+          const fileFromBase64 = base64ToFile(data.Image, `vehicle_${vehicleId}_${Date.now()}.jpg`);
+          
+          console.log(`[updateVehicle] Base64 converted to File:`, {
+            size: `${(fileFromBase64.size / 1024).toFixed(2)}KB`,
+          });
 
-        const res = await fetch(`/api/vehicles/${encodeURIComponent(vehicleId)}`, {
-          method: "PUT",
-          headers,
-          body,
-          credentials: "include",
-        });
-
-        if (!res.ok) {
-          const json = await res.json().catch(() => ({}));
-          throw new Error(json.error || `Failed to update vehicle: ${res.status}`);
+          cloudinaryImageUrl = await uploadImageToCloudinary(
+            fileFromBase64,
+            data.Category || originalVehicle.Category || "Cars",
+            vehicleId
+          );
+          
+          console.log(`[updateVehicle] Cloudinary upload complete:`, {
+            url: cloudinaryImageUrl.substring(0, 100) + "...",
+          });
         }
-
-        const result = await res.json();
-
-        if (!result.ok) {
-          throw new Error(result.error || "Failed to update vehicle");
+        // Case C: We have an existing URL in data.Image
+        else if (data.Image && (data.Image.startsWith("http://") || data.Image.startsWith("https://"))) {
+          console.log(`[updateVehicle] Using existing URL:`, {
+            url: data.Image.substring(0, 100) + "...",
+          });
+          cloudinaryImageUrl = data.Image;
         }
-
-        // Call success callback with updated vehicle
-        onSuccess?.({ ...originalVehicle, ...data });
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error("Failed to update vehicle");
+      } catch (uploadError) {
+        console.error(`[updateVehicle] Image upload failed:`, uploadError);
+        setIsUpdating(false);
+        const error = uploadError instanceof Error ? uploadError : new Error("Image upload failed");
         onError?.(error, originalVehicle);
         throw error;
-      } finally {
-        setIsUpdating(false);
+      }
+
+      // Step 2: Prepare payload with Cloudinary URL (never send Base64)
+      const payload: Record<string, unknown> = {
+        id: vehicleId,
+        category: data.Category || originalVehicle.Category,
+        brand: data.Brand || originalVehicle.Brand,
+        model: data.Model || originalVehicle.Model,
+        year: data.Year || originalVehicle.Year,
+        plate: data.Plate || originalVehicle.Plate,
+        color: data.Color || originalVehicle.Color,
+        condition: data.Condition || originalVehicle.Condition,
+        body_type: data.BodyType || originalVehicle.BodyType,
+        tax_type: data.TaxType || originalVehicle.TaxType,
+        market_price: data.PriceNew || originalVehicle.PriceNew,
+      };
+
+      // Only add image_id if we have a valid Cloudinary URL
+      if (cloudinaryImageUrl) {
+        payload.image_id = cloudinaryImageUrl;
+        console.log(`[updateVehicle] Payload will include Cloudinary URL`);
+      } else {
+        console.log(`[updateVehicle] No image to save - payload has no image_id`);
+      }
+
+      // Remove undefined values
+      Object.keys(payload).forEach(key => {
+        if (payload[key] === undefined) {
+          delete payload[key];
+        }
+      });
+
+      // Step 3: Send to API with retry logic (only for the API call, not upload)
+      while (attempts < MAX_RETRY_ATTEMPTS) {
+        attempts++;
+        
+        console.log(`[updateVehicle] API call attempt ${attempts}/${MAX_RETRY_ATTEMPTS}`);
+
+        try {
+          const res = await fetch(`/api/vehicles/${encodeURIComponent(vehicleId)}`, {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+            credentials: "include",
+          });
+
+          console.log(`[updateVehicle] API response status: ${res.status}`);
+
+          if (!res.ok) {
+            const json = await res.json().catch(() => ({}));
+            const errorMessage = json.error || `Failed to update vehicle: ${res.status}`;
+            throw new Error(`[HTTP ${res.status}] ${errorMessage}`);
+          }
+
+          const result = await res.json();
+
+          if (!result.ok) {
+            throw new Error(result.error || "API returned error");
+          }
+
+          const updatedVehicle = result.data || { ...originalVehicle, ...data, Image: cloudinaryImageUrl };
+          
+          console.log(`[updateVehicle] Update successful for vehicle ${vehicleId}`);
+
+          // Record mutation to trigger auto-refresh
+          recordMutation();
+          console.log(`[updateVehicle] Mutation recorded - VehicleList will auto-refresh`);
+
+          // Call success callback
+          onSuccess?.(updatedVehicle);
+          
+          setIsUpdating(false);
+          return;
+          
+        } catch (err) {
+          lastError = err instanceof Error ? err : new Error("Failed to update vehicle");
+          
+          console.error(`[updateVehicle] API error on attempt ${attempts}:`, lastError.message);
+
+          // Check if we should retry
+          if (attempts < MAX_RETRY_ATTEMPTS && isRetryableError(lastError)) {
+            const retryDelay = RETRY_DELAY_MS * Math.pow(2, attempts - 1);
+            console.log(`[updateVehicle] Retrying after ${retryDelay}ms...`);
+            await delay(retryDelay);
+            continue;
+          }
+          
+          break;
+        }
+      }
+
+      // All retries exhausted
+      setIsUpdating(false);
+      
+      if (lastError) {
+        const enhancedError = new Error(
+          `${lastError.message}\n\n(Attempted ${attempts} time${attempts > 1 ? 's' : ''})`
+        );
+        onError?.(enhancedError, originalVehicle);
+        throw enhancedError;
       }
     },
     [onSuccess, onError]
@@ -101,4 +414,3 @@ export function useUpdateVehicleOptimistic(
     isUpdating,
   };
 }
-

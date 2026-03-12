@@ -1,7 +1,7 @@
 
 
 import { useCallback, useEffect, useState, useRef } from "react";
-import { vehicleApi, isApiError, isConfigError, isNetworkError, getErrorDetails, NetworkError } from "./api";
+import { vehicleApi, isApiError, isConfigError, isNetworkError, getErrorDetails, NetworkError, type VehicleFilters } from "./api";
 import { onVehicleCacheUpdate, shouldUseCache, isCacheStale } from "./vehicleCache";
 import type { Vehicle, VehicleMeta } from "./types";
 import { isIOSSafariBrowser } from "./platform";
@@ -11,6 +11,9 @@ const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 1000; // 1 second
 const MAX_RETRY_DELAY = 5000; // 5 seconds
 
+// Debounce delay for filter changes (ms)
+const FILTER_DEBOUNCE_MS = 300;
+
 interface UseVehiclesReturn {
   vehicles: Vehicle[];
   meta: VehicleMeta | null;
@@ -18,6 +21,7 @@ interface UseVehiclesReturn {
   error: string | null;
   refetch: () => Promise<void>;
   lastSyncTime: Date | null;
+  isFiltering: boolean;
 }
 
 // Helper function to delay with exponential backoff
@@ -25,19 +29,36 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export function useVehicles(noCache = true): UseVehiclesReturn {
+interface UseVehiclesOptions {
+  noCache?: boolean;
+  filters?: VehicleFilters;
+  /** Maximum number of vehicles to fetch (default: 100, use 0 or high number for all) */
+  limit?: number;
+}
+
+export function useVehicles(options: UseVehiclesOptions = {}): UseVehiclesReturn {
+  const { noCache = true, filters, limit: customLimit } = options;
+  
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [meta, setMeta] = useState<VehicleMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [isFiltering, setIsFiltering] = useState(false);
   
   // Use ref to track retry attempts without triggering re-renders
   const retryCountRef = useRef(0);
+  
+  // Use ref for debounce timeout
+  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const fetchVehicles = useCallback(async () => {
+  const fetchVehicles = useCallback(async (currentFilters?: VehicleFilters) => {
     setLoading(true);
     setError(null);
+    
+    // Set filtering state if filters are active
+    const hasActiveFilters = currentFilters && Object.keys(currentFilters).length > 0;
+    setIsFiltering(!!hasActiveFilters);
     
     // Reset retry count on new fetch attempt
     retryCountRef.current = 0;
@@ -53,14 +74,15 @@ export function useVehicles(noCache = true): UseVehiclesReturn {
         }
         
         const useLiteMode = isIOSSafariBrowser();
+        // Use custom limit if provided, otherwise use default/lite mode limits
+        const maxRows = customLimit || (useLiteMode ? 250 : undefined);
         const result = await vehicleApi.getVehicles(
           effectiveNoCache,
-          useLiteMode
-            ? {
-                lite: true,
-                maxRows: 250,
-              }
-            : undefined
+          {
+            lite: useLiteMode,
+            maxRows: maxRows,
+            filters: currentFilters,
+          }
         );
         
         // Validate that we actually got data
@@ -160,30 +182,46 @@ export function useVehicles(noCache = true): UseVehiclesReturn {
       
     } finally {
       setLoading(false);
+      setIsFiltering(false);
     }
-  }, [noCache]);
+  }, [noCache, customLimit]);
 
-
+  // Initial fetch and refetch when filters change (with debounce)
   useEffect(() => {
-    fetchVehicles();
-  }, [fetchVehicles]);
+    // Clear any existing debounce timeout
+    if (debounceTimeoutRef.current) {
+      clearTimeout(debounceTimeoutRef.current);
+    }
+    
+    // Debounce filter changes to avoid excessive API calls
+    debounceTimeoutRef.current = setTimeout(() => {
+      fetchVehicles(filters);
+    }, filters?.search ? FILTER_DEBOUNCE_MS : 0);
+    
+    // Cleanup timeout on unmount or filter change
+    return () => {
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+    };
+  }, [fetchVehicles, filters]);
 
   // Listen for cache updates from other components (e.g., after adding a vehicle)
   useEffect(() => {
     const unsubscribe = onVehicleCacheUpdate(() => {
       // Refetch when cache is updated by another component
-      fetchVehicles();
+      fetchVehicles(filters);
     });
     return unsubscribe;
-  }, [fetchVehicles]);
+  }, [fetchVehicles, filters]);
 
   return {
-
     vehicles,
     meta,
     loading,
     error,
-    refetch: fetchVehicles,
+    refetch: () => fetchVehicles(filters),
     lastSyncTime,
+    isFiltering,
   };
 }

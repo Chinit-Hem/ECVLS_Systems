@@ -14,12 +14,12 @@ async function verifyData() {
     console.log("🔍 Verifying database data...\n");
 
     // Check total count
-    const countResult = await sql`SELECT COUNT(*) as count FROM cleaned_vehicles_for_google_sheets`;
+    const countResult = await sql`SELECT COUNT(*) as count FROM vehicles`;
     const totalCount = parseInt(countResult[0].count);
     console.log(`📊 Total vehicles: ${totalCount}`);
 
     // Get sample data
-    const sample = await sql`SELECT * FROM cleaned_vehicles_for_google_sheets LIMIT 5`;
+    const sample = await sql`SELECT * FROM vehicles LIMIT 5`;
     
     console.log("\n📋 Columns in table:");
     if (sample.length > 0) {

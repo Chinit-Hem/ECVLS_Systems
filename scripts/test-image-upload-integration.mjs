@@ -247,7 +247,7 @@ async function verifyDatabaseRecord(vehicle, tracker) {
     }
     
     const result = await sql`
-      SELECT * FROM cleaned_vehicles_for_google_sheets 
+      SELECT * FROM vehicles 
       WHERE id = ${vehicleId}
     `;
     
@@ -293,7 +293,7 @@ async function cleanupTestVehicle(vehicle, tracker) {
     }
     
     // Delete from database
-    await sql`DELETE FROM cleaned_vehicles_for_google_sheets WHERE id = ${vehicleId}`;
+    await sql`DELETE FROM vehicles WHERE id = ${vehicleId}`;
     
     // Try to delete from Cloudinary if we have the image
     if (vehicle.Image && vehicle.Image.includes("cloudinary.com")) {

@@ -33,6 +33,7 @@ interface QueryOptions {
   maxRetries?: number;
   cacheKey?: string;
   cacheTtlMs?: number;
+  timeoutMs?: number; // Query timeout in milliseconds
 }
 
 /**
@@ -111,7 +112,20 @@ class DatabaseManager {
       return this.sqlClient;
     }
 
-    this.sqlClient = neon(this.config.url, {
+    // Add sdk_semver query parameter to satisfy Neon API requirement
+    // This is required by Neon SDK 1.0.2+ to identify the client version
+    // Parse the URL properly to handle existing query parameters
+    const baseUrl = this.config.url;
+    const urlObj = new URL(baseUrl);
+    
+    // Add sdk_semver parameter
+    urlObj.searchParams.set('sdk_semver', '1.0.2');
+    
+    const urlWithSdkVersion = urlObj.toString();
+
+    console.log('[DB-Singleton] Connecting with URL:', urlWithSdkVersion.replace(/\/\/.*@/, '//[CREDENTIALS]@'));
+
+    this.sqlClient = neon(urlWithSdkVersion, {
       fetchOptions: {
         keepalive: this.config.enableKeepalive,
       },
@@ -199,7 +213,7 @@ class DatabaseManager {
   }
 
   /**
-   * Execute a query with retry logic and metrics
+   * Execute a query with retry logic, metrics, and optional timeout
    */
   public async query<T>(
     queryFn: () => Promise<T>,
@@ -208,6 +222,7 @@ class DatabaseManager {
     const {
       operationName = "database query",
       maxRetries = 3,
+      timeoutMs,
     } = options;
 
     const startTime = Date.now();
@@ -215,7 +230,19 @@ class DatabaseManager {
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
-        const result = await queryFn();
+        let result: T;
+        
+        // Apply timeout if specified
+        if (timeoutMs && timeoutMs > 0) {
+          result = await Promise.race([
+            queryFn(),
+            new Promise<never>((_, reject) => 
+              setTimeout(() => reject(new Error(`Query timeout after ${timeoutMs}ms`)), timeoutMs)
+            )
+          ]);
+        } else {
+          result = await queryFn();
+        }
         
         const duration = Date.now() - startTime;
         this.updateMetrics(true, duration);
@@ -260,6 +287,64 @@ class DatabaseManager {
     return this.query(
       () => sql(strings, ...values) as Promise<T[]>,
       { operationName: "raw SQL query" }
+    );
+  }
+
+  /**
+   * Execute an unsafe/raw SQL query string
+   * Uses the sql function with a template literal containing the raw query
+   */
+  public async executeUnsafe<T>(query: string): Promise<T[]> {
+    return this.query(
+      async () => {
+        const sql = this.getClient();
+        
+        // Log query in development for debugging
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[DB-Singleton] Executing query:', query.substring(0, 200) + (query.length > 200 ? '...' : ''));
+        }
+        
+        try {
+          // For Neon SDK, we need to use the template literal syntax properly
+          // Split the query into parts and use the tagged template literal
+          const queryParts = query.split('?');
+          if (queryParts.length === 1) {
+            // No placeholders, use simple query
+            const strings = Object.assign([query], { raw: [query] }) as TemplateStringsArray;
+            const result = await sql(strings);
+            return result as T[];
+          } else {
+            // Has placeholders - this shouldn't happen with our current usage
+            // but handle it just in case
+            const strings = Object.assign(queryParts, { raw: queryParts }) as TemplateStringsArray;
+            const result = await sql(strings);
+            return result as T[];
+          }
+        } catch (execError) {
+          // Enhanced error logging with proper serialization
+          const errorMessage = execError instanceof Error ? execError.message : String(execError);
+          const errorStack = execError instanceof Error ? execError.stack : undefined;
+          const errorName = execError instanceof Error ? execError.name : 'Unknown';
+          
+          console.error('[DB-Singleton] Query execution failed:');
+          console.error('  Query:', query.substring(0, 500));
+          console.error('  Error Name:', errorName);
+          console.error('  Error Message:', errorMessage);
+          if (errorStack) {
+            console.error('  Stack:', errorStack);
+          }
+          
+          // Log the full error object for debugging
+          try {
+            console.error('  Full Error:', JSON.stringify(execError, Object.getOwnPropertyNames(execError), 2));
+          } catch {
+            console.error('  Full Error (raw):', execError);
+          }
+          
+          throw execError;
+        }
+      },
+      { operationName: "unsafe SQL query" }
     );
   }
 

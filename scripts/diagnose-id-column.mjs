@@ -21,7 +21,7 @@ async function diagnose() {
     const columns = await sql`
       SELECT column_name, data_type, is_nullable, column_default
       FROM information_schema.columns 
-      WHERE table_name = 'cleaned_vehicles_for_google_sheets'
+      WHERE table_name = 'vehicles'
       ORDER BY ordinal_position
     `;
     
@@ -55,7 +55,7 @@ async function diagnose() {
       SELECT a.attname, pg_get_expr(d.adbin, d.adrelid) as default_expr
       FROM pg_attribute a
       LEFT JOIN pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
-      WHERE a.attrelid = 'cleaned_vehicles_for_google_sheets'::regclass
+      WHERE a.attrelid = 'vehicles'::regclass
       AND a.attname = 'id'
     `;
     
@@ -69,13 +69,13 @@ async function diagnose() {
     
     // First, let's try to set the default using a simpler approach
     await sql.unsafe(`
-      ALTER TABLE cleaned_vehicles_for_google_sheets 
+      ALTER TABLE vehicles 
       ALTER COLUMN id DROP DEFAULT
     `);
     console.log("   Dropped existing default");
     
     await sql.unsafe(`
-      ALTER TABLE cleaned_vehicles_for_google_sheets 
+      ALTER TABLE vehicles 
       ALTER COLUMN id SET DEFAULT nextval('cleaned_vehicles_id_seq'::regclass)
     `);
     console.log("   Set new default with regclass cast");
@@ -85,7 +85,7 @@ async function diagnose() {
     const verifyResult = await sql`
       SELECT column_default 
       FROM information_schema.columns 
-      WHERE table_name = 'cleaned_vehicles_for_google_sheets' 
+      WHERE table_name = 'vehicles' 
       AND column_name = 'id'
     `;
     console.log("   New column_default:", verifyResult[0].column_default);
@@ -94,7 +94,7 @@ async function diagnose() {
     console.log("\n7️⃣ Testing insert:");
     try {
       const testResult = await sql`
-        INSERT INTO cleaned_vehicles_for_google_sheets (
+        INSERT INTO vehicles (
           category, brand, model, year, plate, market_price,
           condition, created_at, updated_at
         ) VALUES (
@@ -106,7 +106,7 @@ async function diagnose() {
       console.log(`   ✅ Success! New ID: ${testResult[0].id}`);
       
       // Clean up
-      await sql`DELETE FROM cleaned_vehicles_for_google_sheets WHERE id = ${testResult[0].id}`;
+      await sql`DELETE FROM vehicles WHERE id = ${testResult[0].id}`;
       console.log("   ✅ Test record cleaned up");
     } catch (e) {
       console.log(`   ❌ Insert failed: ${e.message}`);

@@ -1,595 +1,739 @@
+/**
+ * Dashboard Component - Complete A-to-Z Refactor
+ * 
+ * Features:
+ * A. Case-insensitive data counting with SQL LOWER()
+ * B. O(n) Hash Map aggregation + 300ms debounced search
+ * C. Fixed Recharts with proper containers + ssr: false
+ * D. Skeleton loaders + 100% responsive mobile layout
+ * 
+ * @module Dashboard
+ */
+
 "use client";
 
-import { useAuthUser } from "@/app/components/AuthContext";
-import { useUI } from "@/app/components/UIContext";
-import ChartCard from "@/app/components/dashboard/ChartCard";
-import KpiCard from "@/app/components/dashboard/KpiCard";
-import SkeletonDashboard from "@/app/components/dashboard/SkeletonDashboard";
-import VehicleModal from "@/app/components/dashboard/VehicleModal";
-import { GlassToast, useToast } from "@/app/components/ui/GlassToast";
-import { isIOSSafariBrowser } from "@/lib/platform";
-import { Suspense, lazy, useEffect, useState } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
+import dynamic from "next/dynamic";
+import type { Vehicle } from "@/lib/types";
+import { useMounted } from "@/lib/useHydrationSafe";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
+import { normalizeCategoryLabel } from "@/lib/analytics";
+import { CATEGORY_COLORS } from "@/lib/categoryColors";
 
-// Lazy load charts
-const MonthlyAddedChart = lazy(() => import("@/app/components/dashboard/charts/MonthlyAddedChart"));
-const NewVsUsedChart = lazy(() => import("@/app/components/dashboard/charts/NewVsUsedChart"));
-const PriceDistributionChart = lazy(() => import("@/app/components/dashboard/charts/PriceDistributionChart"));
-const VehiclesByBrandChart = lazy(() => import("@/app/components/dashboard/charts/VehiclesByBrandChart"));
-const VehiclesByCategoryChart = lazy(() => import("@/app/components/dashboard/charts/VehiclesByCategoryChart"));
+// ============================================================================
+// Dynamic Chart Imports (ssr: false prevents hydration errors)
+// ============================================================================
 
-// Chart loading fallback
-function ChartSkeleton() {
+const VehiclesByCategoryChart = dynamic(
+  () => import("./charts/VehiclesByCategoryChart"),
+  { 
+    ssr: false, 
+    loading: () => <ChartSkeleton height={300} /> 
+  }
+);
+
+const NewVsUsedChart = dynamic(
+  () => import("./charts/NewVsUsedChart"),
+  { 
+    ssr: false, 
+    loading: () => <ChartSkeleton height={300} /> 
+  }
+);
+
+const VehiclesByBrandChart = dynamic(
+  () => import("./charts/VehiclesByBrandChart"),
+  { 
+    ssr: false, 
+    loading: () => <ChartSkeleton height={300} /> 
+  }
+);
+
+const MonthlyAddedChart = dynamic(
+  () => import("./charts/MonthlyAddedChart"),
+  { 
+    ssr: false, 
+    loading: () => <ChartSkeleton height={300} /> 
+  }
+);
+
+// ============================================================================
+// Types & Interfaces
+// ============================================================================
+
+type DashboardMeta = {
+  total: number;
+  countsByCategory: {
+    Cars: number;
+    Motorcycles: number;
+    TukTuks: number;
+  };
+  countsByCondition: {
+    New: number;
+    Used: number;
+  };
+  noImageCount: number;
+  avgPrice: number;
+};
+
+type DashboardProps = {
+  initialVehicles: Vehicle[];
+  initialMeta: DashboardMeta | null;
+  initialError: string | null;
+};
+
+type StatCardProps = {
+  title: string;
+  value: string | number;
+  subtitle?: string;
+  subtitleHref?: string;
+  icon: React.ReactNode;
+  color?: "emerald" | "blue" | "purple" | "orange" | "red";
+  isLoading?: boolean;
+  onClick?: () => void;
+  href?: string;
+};
+
+type ChartSkeletonProps = {
+  height?: number;
+};
+
+// ============================================================================
+// Utility Components
+// ============================================================================
+
+/**
+ * Chart Skeleton Loader
+ */
+function ChartSkeleton({ height = 300 }: ChartSkeletonProps) {
   return (
-    <div className="h-64 flex items-center justify-center">
-      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600"></div>
+    <div 
+      className="w-full flex items-center justify-center bg-gray-50 dark:bg-gray-800 rounded-lg animate-pulse"
+      style={{ height: `${height}px` }}
+    >
+      <div className="flex flex-col items-center gap-3">
+        <div className="w-10 h-10 rounded-full border-4 border-emerald-200 dark:border-emerald-800 border-t-emerald-600 animate-spin" />
+        <span className="text-sm text-gray-400 dark:text-gray-500">Loading chart...</span>
+      </div>
     </div>
   );
 }
-import {
-  buildMonthlyAdded,
-  buildNewVsUsed,
-  buildPriceDistribution,
-  buildVehiclesByBrand,
-  buildVehiclesByCategory,
-  marketPriceStats,
-  normalizeCategoryLabel,
-  normalizeConditionLabel,
-} from "@/lib/analytics";
 
-function normalizeCategoryParam(value: string): string {
-  return normalizeCategoryLabel(value).toLowerCase().replace(/\s+/g, ' ');
-}
+/**
+ * Stat Card with Skeleton State
+ */
+function StatCard({
+  title,
+  value,
+  subtitle,
+  subtitleHref,
+  icon,
+  color = "emerald",
+  isLoading = false,
+  onClick,
+  href,
+}: StatCardProps) {
+  const colorClasses = {
+    emerald: "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400",
+    blue: "bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400",
+    purple: "bg-purple-50 text-purple-600 dark:bg-purple-900/20 dark:text-purple-400",
+    orange: "bg-orange-50 text-orange-600 dark:bg-orange-900/20 dark:text-orange-400",
+    red: "bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400",
+  };
 
-function normalizeConditionParam(value: string): string {
-  return normalizeConditionLabel(value).toLowerCase();
-}
+  const isClickable = !!onClick || !!href;
+  const clickableClasses = isClickable 
+    ? "cursor-pointer hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-200" 
+    : "hover:shadow-md transition-shadow";
 
-function applyFilter(router: ReturnType<typeof useRouter>, filter: { type: "category" | "condition" | "noImage"; value: string | boolean }) {
-  const params = new URLSearchParams();
-  if (filter.type === "category") {
-    params.set("category", normalizeCategoryParam(filter.value as string));
-  } else if (filter.type === "condition") {
-    params.set("condition", normalizeConditionParam(filter.value as string));
-  } else if (filter.type === "noImage") {
-    params.set("noImage", "1");
+  // If we have both href and subtitleHref, we can't nest anchors
+  // Instead, use a div with onClick for the main card and a separate anchor for subtitle
+  const hasNestedLinks = href && subtitleHref;
+
+  const subtitleContent = subtitle && subtitleHref ? (
+    <a 
+      href={subtitleHref} 
+      className="text-xs text-red-500 dark:text-red-400 mt-1 truncate hover:underline cursor-pointer inline-block relative z-10"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {subtitle}
+    </a>
+  ) : subtitle ? (
+    <p className="text-xs text-gray-400 dark:text-gray-500 mt-1 truncate">{subtitle}</p>
+  ) : null;
+
+  const innerContent = (
+    <div className="flex items-center justify-between">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">{title}</p>
+        <p className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white mt-1">{value}</p>
+        {subtitleContent}
+      </div>
+      <div className={`p-2 sm:p-3 rounded-lg flex-shrink-0 ${colorClasses[color]}`}>
+        {icon}
+      </div>
+    </div>
+  );
+
+  if (isLoading) {
+    return (
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-4 sm:p-6 shadow-sm border border-gray-100 dark:border-gray-700 animate-pulse">
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <div className="h-4 w-24 bg-gray-200 dark:bg-gray-700 rounded" />
+            <div className="h-8 w-16 bg-gray-200 dark:bg-gray-700 rounded" />
+          </div>
+          <div className={`p-3 rounded-lg ${colorClasses[color]} opacity-50`}>
+            {icon}
+          </div>
+        </div>
+      </div>
+    );
   }
-  router.push(`/vehicles?${params.toString()}`);
-}
 
-import { getCambodiaNowString } from "@/lib/cambodiaTime";
-import { extractDriveFileId } from "@/lib/drive";
-import type { Vehicle, VehicleMeta } from "@/lib/types";
-import { writeVehicleCache } from "@/lib/vehicleCache";
-import { useRouter } from "next/navigation";
-import { useMemo, useRef } from "react";
-
-// Safe client-side only hook to prevent hydration mismatches
-function useIsMounted() {
-  const [isMounted, setIsMounted] = useState(false);
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
-  return isMounted;
-}
-
-function formatMoney(value: number | null): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  return `$${Math.round(value).toLocaleString()}`;
-}
-
-// Icons
-function IconRefresh({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-      <path d="M3 3v5h5" />
-      <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
-      <path d="M16 21h5v-5" />
-    </svg>
-  );
-}
-
-function IconPlus({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M12 5v14M5 12h14" />
-    </svg>
-  );
-}
-
-function IconClock({ className = "h-3 w-3" }: { className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <circle cx="12" cy="12" r="10" />
-      <polyline points="12 6 12 12 16 14" />
-    </svg>
-  );
-}
-
-function IconAlert({ className = "h-5 w-5" }: { className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-      <line x1="12" y1="9" x2="12" y2="13" />
-      <line x1="12" y1="17" x2="12.01" y2="17" />
-    </svg>
-  );
-}
-
-export default function Dashboard() {
-  const user = useAuthUser();
-  const { isModalOpen, setIsModalOpen } = useUI();
-  const {
-    toasts,
-    removeToast,
-    success: showSuccessToast,
-    error: showErrorToast,
-  } = useToast();
-  const router = useRouter();
-  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [meta, setMeta] = useState<VehicleMeta | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [vehiclesError, setVehiclesError] = useState("");
-  const [lastUpdated, setLastUpdated] = useState<string>("");
-  const [cambodiaNow, setCambodiaNow] = useState(() => getCambodiaNowString());
-  const [isLoading, setIsLoading] = useState(true);
-  const [isIOSSafari, setIsIOSSafari] = useState(false);
-  const fetchAbortRef = useRef<AbortController | null>(null);
-  const isMounted = useIsMounted();
-
-  // Modal state - now using global UI state
-  const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
-
-  // Detect iOS Safari for performance optimization
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      setIsIOSSafari(isIOSSafariBrowser());
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isMounted) return;
-    const interval = window.setInterval(() => setCambodiaNow(getCambodiaNowString()), 1000);
-    return () => window.clearInterval(interval);
-  }, [isMounted]);
-
-  // Load from cache immediately on mount (client-side only)
-  useEffect(() => {
-    if (!isMounted) return;
-    try {
-      // Check cache version to invalidate old cached data with wrong category keys
-      const cacheVersion = localStorage.getItem("vms-vehicles-version");
-      if (cacheVersion !== "3") {
-        // Clear old cache to force fresh data load with normalized categories
-        localStorage.removeItem("vms-vehicles");
-        localStorage.removeItem("vms-vehicles-meta");
-        localStorage.setItem("vms-vehicles-version", "3");
-        console.log("[Dashboard] Cleared old cache to load normalized category data");
-        return;
-      }
-      
-      const cached = localStorage.getItem("vms-vehicles");
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) {
-          setVehicles(parsed as Vehicle[]);
-        }
-      }
-      const cachedMeta = localStorage.getItem("vms-vehicles-meta");
-      if (cachedMeta) {
-        const parsedMeta = JSON.parse(cachedMeta);
-        setMeta(parsedMeta);
-      }
-    } catch {
-      // Ignore cache errors
-    }
-  }, [isMounted]);
-
-  const fetchVehicles = async () => {
-    fetchAbortRef.current?.abort();
-    const controller = new AbortController();
-    fetchAbortRef.current = controller;
-
-    setIsRefreshing(true);
-    setVehiclesError("");
-    try {
-      const res = await fetch("/api/vehicles?noCache=1", {
-        cache: "no-store",
-        signal: controller.signal,
-      });
-      if (res.status === 401) {
-        router.push("/login");
-        return;
-      }
-      if (!res.ok) throw new Error("Failed to fetch vehicles");
-      const data = await res.json();
-      const newVehicles = (data.data || []) as Vehicle[];
-      const newMeta = data.meta as VehicleMeta | undefined;
-      setVehicles(newVehicles);
-      setMeta(newMeta || null);
-      setLastUpdated(getCambodiaNowString());
-      setIsLoading(false);
-      // Save to localStorage (client-side only)
-      if (isMounted) {
-        try {
-          writeVehicleCache(newVehicles);
-          if (newMeta) {
-            localStorage.setItem("vms-vehicles-meta", JSON.stringify(newMeta));
+  // When we have nested links (href + subtitleHref), use div with onClick instead of anchor
+  if (hasNestedLinks) {
+    return (
+      <div 
+        className={`bg-white dark:bg-gray-800 rounded-xl p-4 sm:p-6 shadow-sm border border-gray-100 dark:border-gray-700 ${clickableClasses}`}
+        onClick={() => window.location.href = href!}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            window.location.href = href!;
           }
-        } catch {
-          // Ignore storage errors
-        }
+        }}
+      >
+        {innerContent}
+      </div>
+    );
+  }
+
+  if (href) {
+    return (
+      <a href={href} className="block no-underline">
+        <div className={`bg-white dark:bg-gray-800 rounded-xl p-4 sm:p-6 shadow-sm border border-gray-100 dark:border-gray-700 ${clickableClasses}`}>
+          {innerContent}
+        </div>
+      </a>
+    );
+  }
+
+  if (onClick) {
+    return (
+      <button onClick={onClick} className="w-full text-left">
+        <div className={`bg-white dark:bg-gray-800 rounded-xl p-4 sm:p-6 shadow-sm border border-gray-100 dark:border-gray-700 ${clickableClasses}`}>
+          {innerContent}
+        </div>
+      </button>
+    );
+  }
+
+  return (
+    <div className={`bg-white dark:bg-gray-800 rounded-xl p-4 sm:p-6 shadow-sm border border-gray-100 dark:border-gray-700 ${clickableClasses}`}>
+      {innerContent}
+    </div>
+  );
+}
+
+// ============================================================================
+// Icons
+// ============================================================================
+
+const Icons = {
+  car: (
+    <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0" />
+    </svg>
+  ),
+  motorcycle: (
+    <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <circle cx="5.5" cy="17.5" r="2.5" strokeWidth={1.5} />
+      <circle cx="17.5" cy="17.5" r="2.5" strokeWidth={1.5} />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 17h7l3-6H8.5" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14 11l2 6" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10 11l2-3h3" />
+    </svg>
+  ),
+  tuk: (
+    <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v-3a2 2 0 0 1 2-2h8l3 3v3" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14 13V9a2 2 0 0 1 2-2h2" />
+      <circle cx="7" cy="17" r="2" strokeWidth={1.5} />
+      <circle cx="17" cy="17" r="2" strokeWidth={1.5} />
+    </svg>
+  ),
+  search: (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+    </svg>
+  ),
+  image: (
+    <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+    </svg>
+  ),
+  noImage: (
+    <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3l18 18" />
+    </svg>
+  ),
+  refresh: (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+    </svg>
+  ),
+  totalVehicles: (
+    <div className="flex items-center gap-1">
+      <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0" />
+      </svg>
+      <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <circle cx="5.5" cy="17.5" r="2.5" strokeWidth={1.5} />
+        <circle cx="17.5" cy="17.5" r="2.5" strokeWidth={1.5} />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 17h7l3-6H8.5" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14 11l2 6" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10 11l2-3h3" />
+      </svg>
+      <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v-3a2 2 0 0 1 2-2h8l3 3v3" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14 13V9a2 2 0 0 1 2-2h2" />
+        <circle cx="7" cy="17" r="2" strokeWidth={1.5} />
+        <circle cx="17" cy="17" r="2" strokeWidth={1.5} />
+      </svg>
+    </div>
+  ),
+};
+
+// ============================================================================
+// Main Dashboard Component
+// ============================================================================
+
+export default function Dashboard({
+  initialVehicles,
+  initialMeta,
+  initialError,
+}: DashboardProps) {
+  const isMounted = useMounted();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(initialError);
+  const [searchQuery, setSearchQuery] = useState("");
+  
+  // B. Debounced search (300ms) for smooth performance
+  const debouncedSearch = useDebouncedValue(searchQuery, 300);
+
+  // Use initial data
+  const vehicles = initialVehicles;
+  const meta = initialMeta;
+
+  // ============================================================================
+  // B. O(n) Hash Map Aggregation - Single Pass Algorithm
+  // ============================================================================
+  
+  const aggregatedStats = useMemo(() => {
+    if (!vehicles.length) return null;
+
+    // Single pass O(n) aggregation using Hash Maps
+    const stats = {
+      byCategory: {} as Record<string, number>,
+      byCondition: {} as Record<string, number>,
+      byBrand: {} as Record<string, number>,
+      byMonth: {} as Record<string, number>,
+      totalValue: 0,
+      withImages: 0,
+      withoutImages: 0,
+    };
+
+    for (const vehicle of vehicles) {
+      // A. Case-insensitive category counting
+      const category = (vehicle.Category || "Unknown").toLowerCase().trim();
+      const normalizedCategory = category.includes("car") ? "Cars" :
+                                  category.includes("motor") ? "Motorcycles" :
+                                  category.includes("tuk") ? "TukTuks" : "Other";
+      
+      stats.byCategory[normalizedCategory] = (stats.byCategory[normalizedCategory] || 0) + 1;
+
+      // Condition counting
+      const condition = (vehicle.Condition || "Unknown").toLowerCase().trim();
+      const normalizedCondition = condition.includes("new") ? "New" :
+                                   condition.includes("used") ? "Used" : "Other";
+      stats.byCondition[normalizedCondition] = (stats.byCondition[normalizedCondition] || 0) + 1;
+
+      // Brand counting - normalize to uppercase for consistent grouping
+      const brand = (vehicle.Brand || "Unknown").toUpperCase();
+      stats.byBrand[brand] = (stats.byBrand[brand] || 0) + 1;
+
+      // Monthly aggregation
+      if (vehicle.Time) {
+        const date = new Date(vehicle.Time);
+        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+        stats.byMonth[monthKey] = (stats.byMonth[monthKey] || 0) + 1;
       }
+
+      // Price aggregation (use Price40 as the main price)
+      const price = parseFloat(vehicle.Price40?.toString() || "0");
+      if (price > 0) stats.totalValue += price;
+
+      // Image counting
+      if (vehicle.Image && vehicle.Image.length > 0) {
+        stats.withImages++;
+      } else {
+        stats.withoutImages++;
+      }
+    }
+
+    return stats;
+  }, [vehicles]);
+
+  // ============================================================================
+  // B. Debounced Search Filter - Search ALL vehicle fields
+  // ============================================================================
+
+  const filteredVehicles = useMemo(() => {
+    let result = vehicles;
+
+    // Apply search query - Search ALL vehicle fields
+    if (debouncedSearch.trim()) {
+      const query = debouncedSearch.toLowerCase().trim();
+      const queryNumber = parseFloat(debouncedSearch);
+      
+      // Normalize search term for category matching
+      const normalizedSearchCategory = normalizeCategoryLabel(query);
+      
+      result = result.filter((v) => {
+        // Normalize vehicle category
+        const normalizedVehicleCategory = normalizeCategoryLabel(v.Category);
+        
+        // Check if search matches category (using normalized values)
+        const categoryMatch = 
+          normalizedSearchCategory !== "Other" && normalizedSearchCategory === normalizedVehicleCategory;
+        
+        // Also check raw category string for partial matches
+        const categoryRaw = v.Category?.toLowerCase() || "";
+        const categoryPartialMatch = categoryRaw.includes(query);
+        
+        // Text fields to search
+        const textMatch = 
+          v.Brand?.toLowerCase().includes(query) ||
+          v.Model?.toLowerCase().includes(query) ||
+          v.Plate?.toLowerCase().includes(query) ||
+          categoryMatch ||
+          categoryPartialMatch ||
+          v.Condition?.toLowerCase().includes(query) ||
+          v.Color?.toLowerCase().includes(query) ||
+          v.TaxType?.toLowerCase().includes(query) ||
+          v.BodyType?.toLowerCase().includes(query) ||
+          v.VehicleId?.toString().toLowerCase().includes(query) ||
+          v.Year?.toString().includes(query);
+        
+        // Numeric fields - match if search is a valid number
+        let numberMatch = false;
+        if (!isNaN(queryNumber)) {
+          numberMatch = 
+            v.PriceNew === queryNumber ||
+            v.Price40 === queryNumber ||
+            v.Price70 === queryNumber ||
+            v.Year === queryNumber;
+        }
+        
+        return textMatch || numberMatch;
+      });
+    }
+
+    return result;
+  }, [vehicles, debouncedSearch]);
+
+  // ============================================================================
+  // Chart Data Preparation
+  // ============================================================================
+
+  const categoryChartData = useMemo(() => {
+    if (!meta) return [];
+    return [
+      { name: "Cars", value: meta.countsByCategory.Cars || 0, color: CATEGORY_COLORS.Cars },
+      { name: "Motorcycles", value: meta.countsByCategory.Motorcycles || 0, color: CATEGORY_COLORS.Motorcycles },
+      { name: "Tuk Tuks", value: meta.countsByCategory.TukTuks || 0, color: CATEGORY_COLORS.TukTuks },
+    ].filter((item) => item.value > 0);
+  }, [meta]);
+
+  const conditionChartData = useMemo(() => {
+    if (!meta) return [];
+    return [
+      { name: "New", value: meta.countsByCondition.New || 0, color: "#10b981" },
+      { name: "Used", value: meta.countsByCondition.Used || 0, color: "#6b7280" },
+    ].filter((item) => item.value > 0);
+  }, [meta]);
+
+  const brandChartData = useMemo(() => {
+    if (!aggregatedStats) return [];
+    return Object.entries(aggregatedStats.byBrand)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 10);
+  }, [aggregatedStats]);
+
+  const monthlyChartData = useMemo(() => {
+    if (!aggregatedStats) return [];
+    return Object.entries(aggregatedStats.byMonth)
+      .sort()
+      .slice(-12) // Last 12 months
+      .map(([month, count]) => ({
+        name: month,
+        value: count,
+      }));
+  }, [aggregatedStats]);
+
+  // ============================================================================
+  // Handlers
+  // ============================================================================
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      window.location.reload();
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      setVehiclesError(err instanceof Error ? err.message : "Error loading vehicles");
-      setIsLoading(false);
+      setError("Failed to refresh data");
     } finally {
       setIsRefreshing(false);
     }
-  };
+  }, []);
 
-  useEffect(() => {
-    // Fetch fresh data in background
-    void fetchVehicles();
-    return () => {
-      fetchAbortRef.current?.abort();
-      fetchAbortRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router]);
+  // ============================================================================
+  // Render States
+  // ============================================================================
 
-  // Safe error message extraction to prevent circular reference issues
-  const getSafeErrorMessage = (errorData: unknown): string => {
-    if (errorData === null || errorData === undefined) {
-      return "Failed to save vehicle";
-    }
-    if (typeof errorData === "string") {
-      return errorData || "Failed to save vehicle";
-    }
-    if (typeof errorData === "object") {
-      // Handle { error: "message" } format
-      if (errorData && "error" in errorData) {
-        const err = (errorData as { error: unknown }).error;
-        if (typeof err === "string") return err;
-        if (err === null || err === undefined) return "Failed to save vehicle";
-        try {
-          return String(err);
-        } catch {
-          return "Failed to save vehicle";
-        }
-      }
-      // Handle { message: "message" } format
-      if ("message" in errorData) {
-        const msg = (errorData as { message: unknown }).message;
-        if (typeof msg === "string") return msg;
-        try {
-          return String(msg);
-        } catch {
-          return "Failed to save vehicle";
-        }
-      }
-      // Try to stringify safely
-      try {
-        const str = JSON.stringify(errorData);
-        return str || "Failed to save vehicle";
-      } catch {
-        return "Failed to save vehicle";
-      }
-    }
-    try {
-      return String(errorData);
-    } catch {
-      return "Failed to save vehicle";
-    }
-  };
-
-  const handleSaveVehicle = async (vehicleData: Partial<Vehicle>) => {
-    try {
-      const res = await fetch("/api/vehicles", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(vehicleData),
-      });
-
-      if (!res.ok) {
-        let errorData: unknown;
-        try {
-          errorData = await res.json();
-        } catch {
-          errorData = null;
-        }
-        const errorMessage = getSafeErrorMessage(errorData);
-        throw new Error(errorMessage);
-      }
-
-      // Refresh vehicles list after successful save
-      await fetchVehicles();
-      showSuccessToast("Vehicle added successfully.", 3000);
-    } catch (error) {
-      console.error("Failed to save vehicle:", error);
-      const message = error instanceof Error ? error.message : "Failed to save vehicle";
-      showErrorToast(message, 4500);
-      throw error;
-    }
-  };
-
-  const handleOpenAddModal = () => {
-    setSelectedVehicle(null);
-    setIsModalOpen(true);
-  };
-
-  const handleCloseModal = () => {
-    setIsModalOpen(false);
-    setSelectedVehicle(null);
-  };
-
-  // Use server-provided meta for counts to ensure consistency with table
-  const kpis = useMemo(() => {
-    // If we have meta from server, use it for counts (single source of truth)
-    if (meta) {
-      const stats = marketPriceStats(vehicles);
-      return {
-        total: meta.total ?? vehicles.length,
-        // API now returns normalized category names
-        cars: meta.countsByCategory?.Cars ?? 0,
-        motorcycles: meta.countsByCategory?.Motorcycles ?? 0,
-        tukTuk: meta.countsByCategory?.TukTuks ?? 0,
-        newCount: meta.countsByCondition?.New ?? 0,
-        usedCount: meta.countsByCondition?.Used ?? 0,
-        noImagesCount: meta.noImageCount ?? 0,
-        totalMarketValue: stats.sum,
-        avgPrice: stats.avg,
-        medianPrice: stats.median,
-        pricedCount: stats.count,
-      };
-    }
-
-    // Fallback: compute from vehicles array (client-side only)
-    const countsByCategory: Record<string, number> = { Cars: 0, Motorcycles: 0, "Tuk Tuk": 0, Other: 0 };
-    const countsByCondition: Record<string, number> = { New: 0, Used: 0, Other: 0 };
-    let noImagesCount = 0;
-
-    for (const v of vehicles) {
-      countsByCategory[normalizeCategoryLabel(v.Category)] += 1;
-      countsByCondition[normalizeConditionLabel(v.Condition)] += 1;
-      if (!v.Image || v.Image.trim() === "" || !extractDriveFileId(v.Image)) {
-        noImagesCount += 1;
-      }
-    }
-
-    const stats = marketPriceStats(vehicles);
-    return {
-      total: vehicles.length,
-      cars: countsByCategory.Cars ?? 0,
-      motorcycles: countsByCategory.Motorcycles ?? 0,
-      tukTuk: countsByCategory["Tuk Tuk"] ?? 0,
-      newCount: countsByCondition.New ?? 0,
-      usedCount: countsByCondition.Used ?? 0,
-      noImagesCount,
-      totalMarketValue: stats.sum,
-      avgPrice: stats.avg,
-      medianPrice: stats.median,
-      pricedCount: stats.count,
-    };
-  }, [vehicles, meta]);
-
-  // iOS now gets full functionality like desktop
-  const byCategory = useMemo(() => buildVehiclesByCategory(vehicles), [vehicles]);
-  const byBrand = useMemo(() => buildVehiclesByBrand(vehicles, 12), [vehicles]);
-  const priceDistribution = useMemo(() => buildPriceDistribution(vehicles), [vehicles]);
-  const newVsUsed = useMemo(() => buildNewVsUsed(vehicles), [vehicles]);
-  const monthlyAdded = useMemo(() => buildMonthlyAdded(vehicles), [vehicles]);
-
-  if (isLoading && vehicles.length === 0) {
-    return <SkeletonDashboard />;
-  }
-
-  // iOS-safe classes for performance
-  const heroClass = isIOSSafari 
-    ? "bg-white dark:bg-slate-900 rounded-2xl p-5 sm:p-6 mb-6 border border-gray-200 dark:border-slate-700 shadow-lg"
-    : "ec-dashboard-hero rounded-2xl p-5 sm:p-6 mb-6";
-
-  return (
-    <div className="p-4 sm:p-6 lg:p-8 min-h-screen pb-20 lg:pb-8">
-      <GlassToast toasts={toasts} onRemove={removeToast} />
-      {/* Glass Hero Header */}
-      <div className={heroClass}>
-        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          {/* Left: Title + Welcome */}
-          <div className="space-y-1">
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 dark:text-white tracking-tight">
-              Dashboard
-            </h1>
-            <p className="text-sm text-slate-600 dark:text-white">
-              Welcome, <span className="font-semibold text-slate-800 dark:text-white">{user?.username || "Guest"}</span>
-              <span className="mx-2 text-slate-400">•</span>
-              <span 
-                className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-600 dark:text-white"
-              >
-                {user?.role || "User"}
-              </span>
-            </p>
-            {lastUpdated && (
-              <p className="text-xs text-slate-500 dark:text-gray-300 flex items-center gap-1.5">
-                <span>Last updated:</span>
-                <span className="font-mono text-slate-600 dark:text-gray-200">{lastUpdated}</span>
-                {isRefreshing && (
-                  <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                    <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                    Syncing...
-                  </span>
-                )}
-              </p>
-            )}
-          </div>
-
-          {/* Right: Actions */}
-          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-            {/* Refresh Button */}
-            <button
-              type="button"
-              onClick={() => fetchVehicles()}
-              disabled={isRefreshing}
-              className="ec-dashboard-btn-icon touch-target"
-              aria-label="Refresh data"
-            >
-              <IconRefresh className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">{isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
-            </button>
-
-            {/* Add Vehicle Button */}
-            <button
-              type="button"
-              onClick={handleOpenAddModal}
-              className="ec-dashboard-btn-primary touch-target"
-            >
-              <IconPlus className="h-4 w-4" />
-              <span>Add Vehicle</span>
-            </button>
-
-            {/* Cambodia Time Pill */}
-            <div className="ec-time-pill">
-              <IconClock />
-              <span>{cambodiaNow}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Error Alert */}
-      {vehiclesError ? (
-        <div className="ec-alert-glass mb-6">
-          <div className="flex items-start gap-3">
-            <IconAlert className="h-5 w-5 text-red-500 dark:text-red-400 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <div className="ec-alert-glass-title">Failed to load vehicles</div>
-              <div className="ec-alert-glass-message">{vehiclesError}</div>
-            </div>
-          </div>
+  if (error) {
+    return (
+      <div className="p-4 sm:p-6">
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+          <p className="text-red-600 dark:text-red-400">{error}</p>
           <button
-            onClick={() => fetchVehicles()}
-            className="ec-alert-glass-action mt-3"
+            onClick={handleRefresh}
+            className="mt-3 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm sm:text-base"
           >
-            <IconRefresh className="h-3.5 w-3.5" />
-            <span>Retry</span>
+            Retry
           </button>
         </div>
-      ) : null}
-
-      {/* Metrics Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3 mb-6">
-        <KpiCard 
-          label="Total" 
-          value={kpis.total.toLocaleString()} 
-          sublabel="vehicles"
-          accent="green" 
-          onClick={() => router.push("/vehicles")} 
-        />
-        <KpiCard 
-          label="Cars" 
-          value={kpis.cars.toLocaleString()} 
-          sublabel="vehicles"
-          accent="green" 
-          onClick={() => applyFilter(router, { type: "category", value: "Car" })} 
-        />
-        <KpiCard
-          label="Motorcycles"
-          value={kpis.motorcycles.toLocaleString()}
-          sublabel="vehicles"
-          accent="gray"
-          onClick={() => applyFilter(router, { type: "category", value: "Motorcycle" })}
-        />
-        <KpiCard 
-          label="Tuk Tuk" 
-          value={kpis.tukTuk.toLocaleString()} 
-          sublabel="vehicles"
-          accent="green" 
-          onClick={() => applyFilter(router, { type: "category", value: "Tuk Tuk" })} 
-        />
-        <KpiCard 
-          label="New" 
-          value={kpis.newCount.toLocaleString()} 
-          sublabel="condition"
-          accent="green" 
-          onClick={() => applyFilter(router, { type: "condition", value: "New" })} 
-        />
-        <KpiCard 
-          label="Used" 
-          value={kpis.usedCount.toLocaleString()} 
-          sublabel="condition"
-          accent="red" 
-          onClick={() => applyFilter(router, { type: "condition", value: "Used" })} 
-        />
-        <KpiCard 
-          label="No Images" 
-          value={kpis.noImagesCount.toLocaleString()} 
-          sublabel="need upload"
-          accent="red" 
-          onClick={() => applyFilter(router, { type: "noImage", value: true })} 
-        />
       </div>
+    );
+  }
 
-      {/* Charts Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-        <ChartCard title="Vehicles by Category" subtitle="Distribution across categories">
-          <Suspense fallback={<ChartSkeleton />}>
-            <VehiclesByCategoryChart data={byCategory} />
-          </Suspense>
-        </ChartCard>
+  // D. Show data immediately from initialMeta, skeleton only for charts
+  // Fixed: KPI cards show actual data even before mount to prevent iOS "—" display
+  const showKpiData = meta && !isRefreshing;
 
-        <ChartCard title="New vs Used" subtitle="Condition ratio">
-          <Suspense fallback={<ChartSkeleton />}>
-            <NewVsUsedChart data={newVsUsed} />
-          </Suspense>
-        </ChartCard>
-      </div>
+  const isLoading = !meta || isRefreshing;
 
-      <div className="space-y-4">
-        <ChartCard title="Vehicles by Brand" subtitle="Top brands (others grouped)">
-          <Suspense fallback={<ChartSkeleton />}>
-            <VehiclesByBrandChart data={byBrand} />
-          </Suspense>
-        </ChartCard>
-
-        <ChartCard title="Monthly Added Vehicles" subtitle="Based on Time column">
-          <Suspense fallback={<ChartSkeleton />}>
-            <MonthlyAddedChart data={monthlyAdded} />
-          </Suspense>
-        </ChartCard>
-
-        <ChartCard
-          title="Market Price Distribution"
-          subtitle={`Histogram of MARKET PRICE (priced vehicles: ${kpis.pricedCount.toLocaleString()})`}
-          right={
-            <div className="space-y-0.5 text-right text-xs font-medium text-[var(--muted)]">
-              <div>
-                Total: <span className="font-mono text-[var(--text)]">{formatMoney(kpis.totalMarketValue)}</span>
-              </div>
-              <div>
-                Avg: <span className="font-mono text-[var(--text)]">{formatMoney(kpis.avgPrice)}</span>
-                <span className="mx-1 text-[var(--muted)]/70">•</span>
-                Median: <span className="font-mono text-[var(--text)]">{formatMoney(kpis.medianPrice)}</span>
-              </div>
-            </div>
-          }
+  return (
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6 max-w-[1600px] mx-auto">
+      {/* ============================================================================
+          Header Section - Mobile Responsive
+      ============================================================================ */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">
+            Dashboard
+          </h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            {isLoading ? (
+              <span className="inline-block w-20 h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+            ) : (
+              `${meta.total.toLocaleString()} total vehicles`
+            )}
+          </p>
+        </div>
+        <button
+          onClick={handleRefresh}
+          disabled={isRefreshing}
+          className="flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors text-sm sm:text-base w-full sm:w-auto"
         >
-          <Suspense fallback={<ChartSkeleton />}>
-            <PriceDistributionChart data={priceDistribution} />
-          </Suspense>
-        </ChartCard>
+          <span className={isRefreshing ? "animate-spin" : ""}>{Icons.refresh}</span>
+          {isRefreshing ? "Refreshing..." : "Refresh"}
+        </button>
       </div>
 
-      {/* Vehicle Modal for Add/Edit */}
-      <VehicleModal
-        isOpen={isModalOpen}
-        vehicle={selectedVehicle}
-        onClose={handleCloseModal}
-        onSave={handleSaveVehicle}
-      />
+      {/* ============================================================================
+          Stats Grid - 2 cols mobile, 5 cols desktop
+          Fixed: Use showKpiData to display actual counts immediately on iOS
+      ============================================================================ */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
+        <StatCard
+          title="Total Vehicles"
+          value={showKpiData ? meta.total.toLocaleString() : "—"}
+          subtitle={showKpiData ? `${meta.noImageCount} without images` : "—"}
+          subtitleHref="/vehicles?noImage=1"
+          icon={Icons.totalVehicles}
+          color="emerald"
+          isLoading={!showKpiData}
+          href="/vehicles"
+        />
+        <StatCard
+          title="Cars"
+          value={showKpiData ? meta.countsByCategory.Cars.toLocaleString() : "—"}
+          subtitle="All car types"
+          icon={Icons.car}
+          color="blue"
+          isLoading={!showKpiData}
+          href="/vehicles?category=Cars"
+        />
+        <StatCard
+          title="Motorcycles"
+          value={showKpiData ? meta.countsByCategory.Motorcycles.toLocaleString() : "—"}
+          subtitle="All motorcycle types"
+          icon={Icons.motorcycle}
+          color="purple"
+          isLoading={!showKpiData}
+          href="/vehicles?category=Motorcycles"
+        />
+        <StatCard
+          title="Tuk Tuks"
+          value={showKpiData ? meta.countsByCategory.TukTuks.toLocaleString() : "—"}
+          subtitle="All tuk tuk types"
+          icon={Icons.tuk}
+          color="orange"
+          isLoading={!showKpiData}
+          href="/vehicles?category=Tuk+Tuk"
+        />
+        <StatCard
+          title="No Images"
+          value={showKpiData ? meta.noImageCount.toLocaleString() : "—"}
+          subtitle="Click to view"
+          icon={Icons.noImage}
+          color="red"
+          isLoading={!showKpiData}
+          href="/vehicles?noImage=1"
+        />
+      </div>
+
+      {/* ============================================================================
+          Search Bar - Debounced (300ms)
+      ============================================================================ */}
+      <div className="relative">
+        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+          {Icons.search}
+        </div>
+        <input
+          type="text"
+          placeholder="Search vehicles (Brand, Model, Category, Plate...)..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-full pl-10 pr-4 py-3 border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm sm:text-base"
+        />
+        {debouncedSearch !== searchQuery && (
+          <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
+            <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        )}
+      </div>
+
+      {/* Search Results Count */}
+      <div className="flex flex-wrap items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+        <span>
+          Showing {filteredVehicles.length.toLocaleString()} of {vehicles.length.toLocaleString()} vehicles
+        </span>
+        {debouncedSearch && (
+          <span>
+            matching "{debouncedSearch}"
+          </span>
+        )}
+      </div>
+
+      {/* ============================================================================
+          Charts Grid - C. Fixed Recharts with h-[300px] containers
+      ============================================================================ */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+        {/* Vehicles by Category */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl p-4 sm:p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+          <h3 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Vehicles by Category
+          </h3>
+          {/* C. Fixed: h-[300px] container prevents width(-1) height(-1) error */}
+          <div className="w-full h-[250px] sm:h-[300px]">
+            {isLoading ? (
+              <ChartSkeleton height={300} />
+            ) : (
+              <VehiclesByCategoryChart data={categoryChartData} />
+            )}
+          </div>
+        </div>
+
+        {/* New vs Used */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl p-4 sm:p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+          <h3 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            New vs Used
+          </h3>
+          <div className="w-full h-[250px] sm:h-[300px]">
+            {isLoading ? (
+              <ChartSkeleton height={300} />
+            ) : (
+              <NewVsUsedChart data={conditionChartData} />
+            )}
+          </div>
+        </div>
+
+        {/* Top Brands */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl p-4 sm:p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+          <h3 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Top Brands
+          </h3>
+          <div className="w-full h-[250px] sm:h-[300px]">
+            {isLoading ? (
+              <ChartSkeleton height={300} />
+            ) : (
+              <VehiclesByBrandChart data={brandChartData} />
+            )}
+          </div>
+        </div>
+
+        {/* Monthly Added */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl p-4 sm:p-6 shadow-sm border border-gray-100 dark:border-gray-700">
+          <h3 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Monthly Added
+          </h3>
+          <div className="w-full h-[250px] sm:h-[300px]">
+            {isLoading ? (
+              <ChartSkeleton height={300} />
+            ) : (
+              <MonthlyAddedChart data={monthlyChartData} />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ============================================================================
+          Quick Stats Footer
+      ============================================================================ */}
+      {aggregatedStats && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+          <div className="text-center">
+            <p className="text-2xl sm:text-3xl font-bold text-emerald-600 dark:text-emerald-400">
+              {aggregatedStats.withImages.toLocaleString()}
+            </p>
+            <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">With Images</p>
+          </div>
+          <div className="text-center">
+            <p className="text-2xl sm:text-3xl font-bold text-red-600 dark:text-red-400">
+              {aggregatedStats.withoutImages.toLocaleString()}
+            </p>
+            <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">Without Images</p>
+          </div>
+          <div className="text-center">
+            <p className="text-2xl sm:text-3xl font-bold text-blue-600 dark:text-blue-400">
+              ${Math.round(aggregatedStats.totalValue / (vehicles.length || 1)).toLocaleString()}
+            </p>
+            <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">Avg Price</p>
+          </div>
+          <div className="text-center">
+            <p className="text-2xl sm:text-3xl font-bold text-purple-600 dark:text-purple-400">
+              {Object.keys(aggregatedStats.byBrand).length}
+            </p>
+            <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">Unique Brands</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

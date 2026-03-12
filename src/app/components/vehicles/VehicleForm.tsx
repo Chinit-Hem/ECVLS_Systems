@@ -4,10 +4,12 @@ import React, { useState, useCallback, useEffect } from "react";
 import { GlassField } from "../ui/GlassField";
 import { SectionCard } from "../ui/SectionCard";
 import { GlassButton } from "../ui/GlassButton";
-import { formatCurrency, formatFileSize } from "@/lib/format";
+import { ImageInput } from "../ui/ImageInput";
+import { formatCurrency } from "@/lib/format";
 import { derivePrices } from "@/lib/pricing";
-import { compressImage, formatFileSize as formatImageSize } from "@/lib/compressImage";
+import { formatFileSize as formatImageSize } from "@/lib/compressImage";
 import { fileToDataUrl } from "@/lib/fileToDataUrl";
+import { processImageForUpload } from "@/lib/clientImageCompression";
 import type { Vehicle } from "@/lib/types";
 import {
   COLOR_OPTIONS,
@@ -25,6 +27,10 @@ interface VehicleFormProps {
   isSubmitting: boolean;
   submitError: string | null;
   onClearError: () => void;
+  /** When true, renders as a modal with overlay and close button */
+  isModal?: boolean;
+  /** Modal title (only used when isModal is true) */
+  modalTitle?: string;
 }
 
 interface FormErrors {
@@ -38,21 +44,24 @@ export function VehicleForm({
   isSubmitting,
   submitError,
   onClearError,
+  isModal = false,
+  modalTitle = "Edit Vehicle",
 }: VehicleFormProps) {
   // Form state
   const [formData, setFormData] = useState<Partial<Vehicle>>(vehicle);
-  const [uploadedImageFile, setUploadedImageFile] = useState<File | null>(null);
+  const [uploadedImage, setUploadedImage] = useState<File | string | null>(null);
   const [imageLoading, setImageLoading] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
 
   // Track changes
-  const hasChanges = JSON.stringify(formData) !== JSON.stringify(vehicle) || uploadedImageFile !== null;
+  const hasChanges = JSON.stringify(formData) !== JSON.stringify(vehicle) || uploadedImage !== null;
 
   // Update form when vehicle changes
   useEffect(() => {
     setFormData(vehicle);
-    setUploadedImageFile(null);
+    setUploadedImage(null);
     setErrors({});
     setTouched({});
   }, [vehicle.VehicleId, vehicle.Image]); // Re-initialize when vehicle ID or image changes
@@ -63,7 +72,7 @@ export function VehicleForm({
     if (submitError) {
       onClearError();
     }
-  }, [formData, uploadedImageFile, onClearError, submitError]);
+  }, [formData, uploadedImage, onClearError, submitError]);
 
   // Handle field changes
   const handleChange = useCallback((field: keyof Vehicle, value: string | number | null) => {
@@ -163,7 +172,7 @@ export function VehicleForm({
     return isValid;
   }, [formData, validateField]);
 
-  // Handle image file upload
+  // Handle image file upload - ONLY method now
   const handleImageFile = useCallback(async (file: File | null) => {
     if (!file) return;
     
@@ -191,7 +200,7 @@ export function VehicleForm({
       }
       
       setFormData((prev) => ({ ...prev, Image: previewUrl }));
-      setUploadedImageFile(file);
+      setUploadedImage(file);
     } catch (err) {
       setErrors((prev) => ({ 
         ...prev, 
@@ -202,22 +211,16 @@ export function VehicleForm({
     }
   }, []);
 
-  // Handle paste from clipboard
-  const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    for (const item of items) {
-      if (item.type.startsWith("image/")) {
-        e.preventDefault();
-        const file = item.getAsFile();
-        if (file) {
-          await handleImageFile(file);
-        }
-        break;
+  // Cleanup object URLs to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      // Cleanup any object URLs when component unmounts
+      const currentImage = formData.Image;
+      if (currentImage && currentImage.startsWith("blob:")) {
+        URL.revokeObjectURL(currentImage);
       }
-    }
-  }, [handleImageFile]);
+    };
+  }, [formData.Image]);
 
   // Handle form submission
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
@@ -234,13 +237,59 @@ export function VehicleForm({
       return;
     }
 
-    await onSubmit(formData, uploadedImageFile);
-  }, [formData, uploadedImageFile, onSubmit, validateForm]);
+    // Handle both File and URL image updates
+    let imageFile: File | null = null;
+    let imageUrl: string | null = null;
+    
+    if (uploadedImage instanceof File) {
+      // File upload case - compress before submitting
+      console.log(`[VehicleForm] Compressing image before upload: ${uploadedImage.name} (${formatImageSize(uploadedImage.size)})`);
+      setIsCompressing(true);
+      
+      try {
+        const compressedFile = await processImageForUpload(uploadedImage, {
+          maxWidth: 1200,
+          quality: 0.7,
+          autoCompress: true,
+          maxSizeMB: 1
+        });
+        
+        const originalSize = uploadedImage.size;
+        const compressedSize = compressedFile.size;
+        const compressionRatio = ((originalSize - compressedSize) / originalSize * 100).toFixed(1);
+        
+        console.log(`[VehicleForm] Image compression complete:`, {
+          originalSize: formatImageSize(originalSize),
+          compressedSize: formatImageSize(compressedSize),
+          compressionRatio: `${compressionRatio}%`,
+          fileName: compressedFile.name,
+          fileType: compressedFile.type
+        });
+        
+        imageFile = compressedFile;
+      } catch (compressionError) {
+        console.warn(`[VehicleForm] Image compression failed, using original:`, compressionError);
+        imageFile = uploadedImage;
+      } finally {
+        setIsCompressing(false);
+      }
+    } else if (typeof uploadedImage === "string" && uploadedImage.trim()) {
+      // URL paste case - pass URL in formData.Image
+      imageUrl = uploadedImage.trim();
+    }
+    
+    // Include image URL in form data if provided
+    const submitData = imageUrl 
+      ? { ...formData, Image: imageUrl }
+      : formData;
+    
+    await onSubmit(submitData, imageFile);
+  }, [formData, uploadedImage, onSubmit, validateForm]);
 
   // Handle remove image
   const handleRemoveImage = useCallback(() => {
     setFormData((prev) => ({ ...prev, Image: "" }));
-    setUploadedImageFile(null);
+    setUploadedImage(null);
   }, []);
 
   // Derived prices for display
@@ -283,108 +332,46 @@ export function VehicleForm({
     ),
   };
 
-  return (
-    <form onSubmit={handleSubmit} onPaste={handlePaste} className="space-y-6">
-      {/* Image Section */}
+  // Form content
+  const formContent = (
+    <form onSubmit={handleSubmit} className="space-y-6">
+      {/* Image Section - Full Featured with ImageInput */}
       <SectionCard title="Vehicle Image" icon={icons.image}>
-        {formData.Image ? (
-          <div className="space-y-4">
-            <div className="relative aspect-video rounded-xl overflow-hidden bg-gray-100 dark:bg-gray-800">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={formData.Image}
-                alt="Vehicle"
-                className="w-full h-full object-cover"
-              />
-            </div>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <label htmlFor="vehicle-image-replace" className="flex-1 cursor-pointer pointer-events-auto">
-                <input
-                  id="vehicle-image-replace"
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => handleImageFile(e.target.files?.[0] ?? null)}
-                  className="hidden"
-                  disabled={imageLoading || isSubmitting}
-                />
-                <div className="w-full px-4 py-2.5 bg-white/5 dark:bg-white/5 border border-white/20 dark:border-white/20 rounded-xl text-center cursor-pointer hover:bg-white/10 dark:hover:bg-white/10 transition-colors text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Replace Image
-                </div>
-              </label>
-
-              <button
-                type="button"
-                onClick={handleRemoveImage}
-                disabled={imageLoading || isSubmitting}
-                className="px-4 py-2.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-colors text-sm font-medium border border-red-200 dark:border-red-800"
-              >
-                Remove
-              </button>
-            </div>
-            {imageLoading && (
-              <p className="text-sm text-gray-500 dark:text-gray-400 flex items-center gap-2">
-                <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                Compressing image...
-              </p>
-            )}
-            {uploadedImageFile && (
-              <p className="text-sm text-emerald-600 dark:text-emerald-400">
-                Ready: {formatImageSize(uploadedImageFile.size)}
-              </p>
-            )}
-            {errors.Image && (
-              <p className="text-sm text-red-600 dark:text-red-400">{errors.Image}</p>
-            )}
-          </div>
-        ) : (
-          <div className="border-2 border-dashed border-white/20 dark:border-white/20 rounded-xl p-8 text-center bg-white/5 dark:bg-white/5">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-white/10 dark:bg-white/10 flex items-center justify-center">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="h-8 w-8 text-gray-400">
-                <rect width="18" height="18" x="3" y="3" rx="2" />
-                <circle cx="8.5" cy="8.5" r="1.5" />
-                <path d="m21 15-5-5L5 21" />
-              </svg>
-            </div>
-            <p className="text-gray-500 dark:text-gray-400 mb-4">
-              No image uploaded
-            </p>
-            <input
-              id="vehicle-image-upload"
-              type="file"
-              accept="image/*"
-              onChange={(e) => handleImageFile(e.target.files?.[0] ?? null)}
-              className="hidden"
-              disabled={imageLoading || isSubmitting}
-            />
-            <label
-              htmlFor="vehicle-image-upload"
-              className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-500 text-white shadow-[0_4px_14px_rgba(5,150,105,0.35),inset_0_1px_0_rgba(255,255,255,0.3)] hover:shadow-[0_6px_20px_rgba(5,150,105,0.45)] hover:brightness-105 border border-emerald-500/30 transition-all duration-200 ease-out active:scale-[0.98] cursor-pointer pointer-events-auto"
-            >
-              Upload Image
-            </label>
-
-
-            <div className="mt-4">
-              <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Or paste image URL</p>
-              <GlassField
-                label=""
-                type="url"
-                value={formData.Image || ""}
-                onChange={(e) => handleChange("Image", e.target.value)}
-                onBlur={() => handleBlur("Image")}
-                placeholder="https://..."
-                disabled={isSubmitting}
-              />
-            </div>
-            {uploadedImageFile && formData.Image && (
-              <p className="mt-2 text-sm text-amber-600 dark:text-amber-400">
-                ⚠️ Both file and URL set. File upload will be used.
-              </p>
-            )}
-          </div>
+        <ImageInput
+          value={formData.Image?.trim() || null}
+          onChange={async (value) => {
+            if (!value) {
+              handleRemoveImage();
+              return;
+            }
+            // Handle URL or data URL
+            if (value.startsWith("http") || value.startsWith("data:")) {
+              setFormData((prev) => ({ ...prev, Image: value }));
+              setUploadedImage(value);
+              setErrors((prev) => ({ ...prev, Image: "" }));
+            }
+          }}
+          label="Vehicle Image"
+          helperText="Drag & drop, click to upload, paste URL, or Ctrl+V to paste image"
+          disabled={imageLoading || isSubmitting}
+          maxSizeMB={5}
+        />
+        {imageLoading && (
+          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400 flex items-center gap-2">
+            <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            Processing image...
+          </p>
+        )}
+        {uploadedImage instanceof File && (
+          <p className="mt-2 text-sm text-emerald-600 dark:text-emerald-400">
+            Ready: {formatImageSize(uploadedImage.size)}
+          </p>
+        )}
+        {errors.Image && (
+          <p className="mt-2 text-sm text-red-600 dark:text-red-400">{errors.Image}</p>
         )}
       </SectionCard>
 
@@ -551,11 +538,11 @@ export function VehicleForm({
             variant="primary"
             size="lg"
             fullWidth
-            isLoading={isSubmitting}
-            disabled={!hasChanges || isSubmitting}
+            isLoading={isSubmitting || isCompressing}
+            disabled={!hasChanges || isSubmitting || isCompressing}
             className="order-1 sm:order-2"
           >
-            {isSubmitting ? "Saving Changes..." : "Save Changes"}
+            {isCompressing ? "Processing Image..." : isSubmitting ? "Saving Changes..." : "Save Changes"}
           </GlassButton>
           <GlassButton
             type="button"
@@ -566,7 +553,7 @@ export function VehicleForm({
             disabled={isSubmitting}
             className="order-2 sm:order-1"
           >
-            Back
+            {isModal ? "Cancel" : "Back"}
           </GlassButton>
         </div>
         {hasChanges && !isSubmitting && (
@@ -577,4 +564,56 @@ export function VehicleForm({
       </div>
     </form>
   );
+
+  // Render with modal wrapper if isModal is true
+  if (isModal) {
+    return (
+      <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50 backdrop-blur-sm">
+        <div className="min-h-screen px-4 py-4 md:py-8">
+          <div className="max-w-4xl mx-auto w-full animate-in fade-in slide-in-from-bottom-4 duration-300 bg-gradient-to-br from-white/70 via-emerald-100/20 via-red-50/10 via-emerald-50/15 to-white/70 dark:from-white/8 dark:via-emerald-500/15 dark:via-red-900/8 dark:via-emerald-900/12 dark:to-white/8 rounded-2xl shadow-2xl border border-white/20 dark:border-white/10 overflow-hidden">
+            {/* Modal Header */}
+            <div className="sticky top-0 z-10 bg-white/95 dark:bg-gray-900/95 backdrop-blur-lg border-b border-gray-200 dark:border-gray-800 p-4 md:p-6 rounded-t-2xl">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">
+                    {modalTitle}
+                  </h2>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                    {vehicle.Brand} {vehicle.Model} • {vehicle.Plate}
+                  </p>
+                </div>
+                <button
+                  onClick={onCancel}
+                  disabled={isSubmitting}
+                  className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-6 w-6 text-gray-500"
+                  >
+                    <path d="M18 6 6 18" />
+                    <path d="m6 6 12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Form Content */}
+            <div className="p-4 md:p-6">
+              {formContent}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Regular inline form
+  return formContent;
 }

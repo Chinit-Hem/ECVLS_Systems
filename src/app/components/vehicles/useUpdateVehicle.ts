@@ -35,14 +35,31 @@ export function useUpdateVehicle(
         let body: string | FormData;
         const headers: Record<string, string> = {};
 
+        // Map capitalized keys to lowercase for API compatibility
+        const keyMapping: Record<string, string> = {
+          "VehicleId": "id",
+          "Category": "category",
+          "Brand": "brand",
+          "Model": "model",
+          "Year": "year",
+          "Plate": "plate",
+          "Color": "color",
+          "Condition": "condition",
+          "BodyType": "body_type",
+          "TaxType": "tax_type",
+          "PriceNew": "market_price",
+          "Image": "image_id",
+        };
+
         if (imageFile) {
           // Use FormData for image uploads
           const formData = new FormData();
           
-          // Add vehicle data
+          // Add vehicle data with mapped keys
           Object.entries(data).forEach(([key, value]) => {
             if (value != null && key !== "Image") {
-              formData.append(key, String(value));
+              const mappedKey = keyMapping[key] || key.toLowerCase();
+              formData.append(mappedKey, String(value));
             }
           });
 
@@ -57,9 +74,16 @@ export function useUpdateVehicle(
 
           body = formData;
         } else {
-          // Use JSON for non-image updates
+          // Use JSON for non-image updates with mapped keys
           headers["Content-Type"] = "application/json";
-          body = JSON.stringify(data);
+          const mappedData: Record<string, unknown> = {};
+          Object.entries(data).forEach(([key, value]) => {
+            if (value != null) {
+              const mappedKey = keyMapping[key] || key.toLowerCase();
+              mappedData[mappedKey] = value;
+            }
+          });
+          body = JSON.stringify(mappedData);
         }
 
         const res = await fetch(`/api/vehicles/${encodeURIComponent(data.VehicleId)}`, {
@@ -81,7 +105,10 @@ export function useUpdateVehicle(
         }
         
         if (!res.ok || json.ok === false) {
-          throw new Error(json.error || "Failed to save vehicle");
+          // Add HTTP status prefix for retry logic detection
+          const error = new Error(`[HTTP ${res.status}] ${json.error || "Failed to save vehicle"}`);
+          (error as Error & { statusCode: number }).statusCode = res.status;
+          throw error;
         }
 
         // Get the updated vehicle data from the response (includes new image URL)

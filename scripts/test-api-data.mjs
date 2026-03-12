@@ -39,7 +39,7 @@ async function testApiData() {
     console.log("🔍 Testing API data format with pricing calculations...\n");
 
     // Get vehicles from database
-    const dbVehicles = await sql`SELECT * FROM cleaned_vehicles_for_google_sheets LIMIT 3`;
+    const dbVehicles = await sql`SELECT * FROM vehicles LIMIT 3`;
     
     console.log(`✅ Retrieved ${dbVehicles.length} vehicles from database\n`);
     

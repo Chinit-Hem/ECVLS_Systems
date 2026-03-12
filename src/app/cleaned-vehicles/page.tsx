@@ -58,10 +58,10 @@ export default function CleanedVehiclesPage() {
       const params = new URLSearchParams();
       if (filter.category) params.set("category", filter.category);
       if (filter.brand) params.set("brand", filter.brand);
-      params.set("limit", "1000");
+      params.set("limit", "100"); // Reduced from 1000 for better performance
       
       const res = await fetch(`/api/cleaned-vehicles?${params.toString()}`, {
-        cache: "no-store",
+        cache: "default", // Use cache instead of no-store for better performance
       });
       
       if (!res.ok) throw new Error("Failed to fetch vehicles");

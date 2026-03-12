@@ -1,6 +1,6 @@
 import { sql } from "@/lib/db";
 
-// Vehicle type definition based on the cleaned_vehicles_for_google_sheets table schema
+// Vehicle type definition based on the vehicles table schema
 interface Vehicle {
   id: number;
   category: string;
@@ -34,7 +34,7 @@ export default async function VehiclesDbPage() {
       throw new Error("Database connection test failed");
     }
 
-    // Fetch all vehicles from the cleaned_vehicles_for_google_sheets table
+    // Fetch all vehicles from the vehicles table
     // This contains the real 1,190 vehicles from Google Sheets
     const result = await sql`
       SELECT 
@@ -52,7 +52,7 @@ export default async function VehiclesDbPage() {
         image_id,
         created_at,
         updated_at
-      FROM cleaned_vehicles_for_google_sheets
+      FROM vehicles
       ORDER BY id ASC
     `;
 

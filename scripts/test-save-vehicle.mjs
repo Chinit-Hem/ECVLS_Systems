@@ -21,7 +21,7 @@ async function testSaveVehicle() {
     const columns = await sql`
       SELECT column_name, data_type, is_nullable 
       FROM information_schema.columns 
-      WHERE table_name = 'cleaned_vehicles_for_google_sheets'
+      WHERE table_name = 'vehicles'
       ORDER BY ordinal_position
     `;
     
@@ -50,7 +50,7 @@ async function testSaveVehicle() {
     try {
       const now = new Date().toISOString();
       const result = await sql`
-        INSERT INTO cleaned_vehicles_for_google_sheets (
+        INSERT INTO vehicles (
           category, brand, model, year, plate, market_price,
           tax_type, condition, body_type, color, image_id,
           created_at, updated_at
@@ -77,7 +77,7 @@ async function testSaveVehicle() {
       
       // Clean up - delete test vehicle
       console.log("\n3️⃣ Cleaning up test vehicle...");
-      await sql`DELETE FROM cleaned_vehicles_for_google_sheets WHERE id = ${result[0].id}`;
+      await sql`DELETE FROM vehicles WHERE id = ${result[0].id}`;
       console.log("   ✅ Test vehicle deleted");
       
     } catch (insertError) {
@@ -92,7 +92,7 @@ async function testSaveVehicle() {
 
     // Test 3: Check current vehicle count
     console.log("\n4️⃣ Current vehicle count...");
-    const countResult = await sql`SELECT COUNT(*) as count FROM cleaned_vehicles_for_google_sheets`;
+    const countResult = await sql`SELECT COUNT(*) as count FROM vehicles`;
     console.log("   Total vehicles:", countResult[0].count);
 
   } catch (error) {

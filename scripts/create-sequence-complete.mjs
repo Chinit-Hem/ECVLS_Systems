@@ -17,7 +17,7 @@ async function createSequenceComplete() {
     console.log("🔧 Creating sequence and setting up auto-increment...\n");
 
     // Get max id
-    const maxResult = await sql`SELECT COALESCE(MAX(id), 0) as max_id FROM cleaned_vehicles_for_google_sheets`;
+    const maxResult = await sql`SELECT COALESCE(MAX(id), 0) as max_id FROM vehicles`;
     const maxId = maxResult[0].max_id;
     console.log(`Current max ID: ${maxId}`);
 
@@ -39,7 +39,7 @@ async function createSequenceComplete() {
     // Set column default
     console.log("\n3️⃣ Setting column default...");
     await sql.unsafe(`
-      ALTER TABLE cleaned_vehicles_for_google_sheets 
+      ALTER TABLE vehicles 
       ALTER COLUMN id SET DEFAULT nextval('cleaned_vehicles_id_seq')
     `);
     console.log("   ✅ Default value set");
@@ -47,7 +47,7 @@ async function createSequenceComplete() {
     // Set sequence ownership
     console.log("\n4️⃣ Setting sequence ownership...");
     await sql.unsafe(`
-      ALTER SEQUENCE cleaned_vehicles_id_seq OWNED BY cleaned_vehicles_for_google_sheets.id
+      ALTER SEQUENCE cleaned_vehicles_id_seq OWNED BY vehicles.id
     `);
     console.log("   ✅ Ownership set");
 
@@ -56,7 +56,7 @@ async function createSequenceComplete() {
     const verifyResult = await sql`
       SELECT column_default 
       FROM information_schema.columns 
-      WHERE table_name = 'cleaned_vehicles_for_google_sheets' 
+      WHERE table_name = 'vehicles' 
       AND column_name = 'id'
     `;
     console.log("   Column default:", verifyResult[0].column_default);
@@ -64,7 +64,7 @@ async function createSequenceComplete() {
     // Test insert
     console.log("\n6️⃣ Testing auto-increment...");
     const testResult = await sql`
-      INSERT INTO cleaned_vehicles_for_google_sheets (
+      INSERT INTO vehicles (
         category, brand, model, year, plate, market_price,
         condition, created_at, updated_at
       ) VALUES (
@@ -78,7 +78,7 @@ async function createSequenceComplete() {
 
     // Clean up
     console.log("\n7️⃣ Cleaning up test record...");
-    await sql`DELETE FROM cleaned_vehicles_for_google_sheets WHERE id = ${newId}`;
+    await sql`DELETE FROM vehicles WHERE id = ${newId}`;
     console.log("   ✅ Test record deleted");
 
     console.log("\n✅ SUCCESS! Auto-increment is now working.");

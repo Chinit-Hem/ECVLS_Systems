@@ -37,7 +37,7 @@ async function checkAndFix() {
     const colResult = await sql`
       SELECT column_name, column_default 
       FROM information_schema.columns 
-      WHERE table_name = 'cleaned_vehicles_for_google_sheets' 
+      WHERE table_name = 'vehicles' 
       AND column_name = 'id'
     `;
     
@@ -48,7 +48,7 @@ async function checkAndFix() {
     // Try to set the default using a different method
     console.log("\n🔧 Setting default with explicit cast...");
     await sql.unsafe(`
-      ALTER TABLE cleaned_vehicles_for_google_sheets 
+      ALTER TABLE vehicles
       ALTER COLUMN id SET DEFAULT nextval('cleaned_vehicles_id_seq'::regclass)
     `);
     console.log("✅ Default set with regclass cast");
@@ -57,7 +57,7 @@ async function checkAndFix() {
     const colResult2 = await sql`
       SELECT column_default 
       FROM information_schema.columns 
-      WHERE table_name = 'cleaned_vehicles_for_google_sheets' 
+      WHERE table_name = 'vehicles' 
       AND column_name = 'id'
     `;
     console.log("\nNew column_default:", colResult2[0].column_default);
@@ -65,7 +65,7 @@ async function checkAndFix() {
     // Test insert with explicit nextval
     console.log("\n🧪 Testing insert with explicit id...");
     const testResult = await sql`
-      INSERT INTO cleaned_vehicles_for_google_sheets (
+      INSERT INTO vehicles (
         id, category, brand, model, year, plate, market_price,
         condition, created_at, updated_at
       ) VALUES (
@@ -78,7 +78,7 @@ async function checkAndFix() {
     console.log(`✅ Test insert successful! New ID: ${testResult[0].id}`);
 
     // Clean up
-    await sql`DELETE FROM cleaned_vehicles_for_google_sheets WHERE id = ${testResult[0].id}`;
+    await sql`DELETE FROM vehicles WHERE id = ${testResult[0].id}`;
     console.log("✅ Test record deleted");
 
     console.log("\n✅ Sequence is working! You can now save vehicles.");

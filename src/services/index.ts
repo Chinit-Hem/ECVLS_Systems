@@ -7,6 +7,17 @@
  * @module services
  */
 
+// Base Service
+export {
+  BaseService,
+} from "./BaseService";
+
+export type {
+  ServiceResult,
+  BaseEntity,
+  BaseDBRecord,
+} from "./BaseService";
+
 // Vehicle Service
 export {
   VehicleService,
@@ -20,5 +31,5 @@ export type {
   VehicleFilters,
   VehicleStats,
   PaginatedResult,
-  ServiceResult,
+  VehicleEntity,
 } from "./VehicleService";

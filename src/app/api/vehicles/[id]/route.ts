@@ -1,4 +1,3 @@
-
 import {
   requireSession,
 } from "@/lib/auth";
@@ -9,7 +8,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import { getVehicleById, updateVehicle, deleteVehicle, toVehicle as dbToVehicle } from "@/lib/db-schema";
-import { uploadImage, getCloudinaryFolder, deleteImage } from "@/lib/cloudinary";
+import { deleteImage } from "@/lib/cloudinary";
 
 import { clearCachedVehicles, getCachedVehicles } from "../_cache";
 import {
@@ -175,12 +174,72 @@ export async function GET(
   }
 }
 
+// Constants for timeout configuration
+// Note: Image uploads are now handled directly by the frontend to Cloudinary
+// This API only receives the image URL and updates the database
+const DB_TIMEOUT_MS = 5000; // 5 seconds for database operations
+const TOTAL_TIMEOUT_MS = 10000; // 10 seconds total request timeout (reduced since no image processing)
+
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  console.log("[PUT /api/vehicles/[id]] Handler started");
+  const requestStartTime = Date.now();
+  console.log("[PUT /api/vehicles/[id]] Handler started - Lightweight version (no image processing)");
   
+  // Set up total request timeout
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error(`Request timeout after ${TOTAL_TIMEOUT_MS}ms`)), TOTAL_TIMEOUT_MS);
+  });
+
+  try {
+    const result = await Promise.race([
+      handlePutRequest(req, params),
+      timeoutPromise
+    ]);
+    
+    const duration = Date.now() - requestStartTime;
+    console.log(`[PUT /api/vehicles/[id]] Request completed in ${duration}ms`);
+    return result;
+  } catch (error) {
+    const duration = Date.now() - requestStartTime;
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    console.error(`[PUT /api/vehicles/[id]] Request failed after ${duration}ms:`, errorMessage);
+    
+    // Check if it's a timeout error
+    if (errorMessage.includes("timeout")) {
+      return NextResponse.json(
+        { 
+          ok: false, 
+          error: "Request timeout. The database operation took too long to complete. Please try again.",
+          details: {
+            type: "timeout_error",
+            duration: duration,
+            message: errorMessage
+          }
+        },
+        { status: 504 }
+      );
+    }
+    
+    return NextResponse.json(
+      { 
+        ok: false, 
+        error: errorMessage,
+        details: {
+          type: "request_error",
+          duration: duration
+        }
+      },
+      { status: 500 }
+    );
+  }
+}
+
+async function handlePutRequest(
+  req: NextRequest,
+  params: Promise<{ id: string }>
+) {
   const session = requireSession(req);
   if (!session) {
     console.log("[PUT /api/vehicles/[id]] No session found");
@@ -207,184 +266,142 @@ export async function PUT(
     return NextResponse.json({ ok: false, error: "Invalid vehicle ID format" }, { status: 400 });
   }
 
-  try {
-    // Handle both FormData (new) and JSON (legacy) requests
-    let body: Record<string, unknown>;
-    let newImageFile: File | null = null;
-    let imageDataBase64: string | null = null;
-
-    const contentType = req.headers.get("content-type") || "";
-    console.log(`[PUT /api/vehicles/${id}] Content-Type: ${contentType}`);
-    
-    if (contentType.includes("multipart/form-data")) {
-      const formData = await req.formData();
-      body = {};
-      for (const [key, value] of formData.entries()) {
-        console.log(`[PUT /api/vehicles/${id}] FormData key: ${key}, type: ${typeof value}, isFile: ${value instanceof File}`);
-        if ((key === "image" || key === "imageData") && value instanceof File) {
-          newImageFile = value;
-          console.log(`[PUT /api/vehicles/${id}] Found image file: ${value.name}, size: ${value.size}`);
-        } else {
-          body[key] = value;
-        }
-      }
-    } else {
-      body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-      // Check for base64 image data in JSON
-      imageDataBase64 = (body.imageData || body.image_data) as string;
-      if (imageDataBase64) {
-        console.log(`[PUT /api/vehicles/${id}] Found base64 image data in JSON`);
-      }
-    }
-
-    // Validate required fields
-    const category = sanitizeString(body.Category);
-    const brand = sanitizeString(body.Brand);
-    const model = sanitizeString(body.Model);
-
-    if (!category || !brand || !model) {
-      return NextResponse.json(
-        { ok: false, error: "Category, Brand, and Model are required" },
-        { status: 400 }
-      );
-    }
-
-    // Validate numeric fields
-    const year = sanitizeNumber(body.Year);
-    const priceNew = sanitizeNumber(body.PriceNew);
-
-    if (year !== null && (year < 1900 || year > new Date().getFullYear() + 2)) {
-      return NextResponse.json(
-        { ok: false, error: "Invalid year" },
-        { status: 400 }
-      );
-    }
-
-    if (priceNew !== null && priceNew < 0) {
-      return NextResponse.json(
-        { ok: false, error: "Price must be positive" },
-        { status: 400 }
-      );
-    }
-
-    // Handle image upload if provided
-    let imageId: string | null = null;
-    let imageDataToUpload: string | null = null;
-
-    if (newImageFile) {
-      // Convert File to base64
-      const arrayBuffer = await newImageFile.arrayBuffer();
-      imageDataToUpload = `data:${newImageFile.type};base64,${Buffer.from(arrayBuffer).toString('base64')}`;
-      console.log(`[PUT /api/vehicles/${vehicleId}] Converted file to base64, length: ${imageDataToUpload.length}`);
-    } else if (imageDataBase64 && typeof imageDataBase64 === "string" && imageDataBase64.startsWith("data:image/")) {
-      imageDataToUpload = imageDataBase64;
-      console.log(`[PUT /api/vehicles/${vehicleId}] Using base64 image data from JSON`);
-    }
-
-    if (imageDataToUpload) {
-      // Validate Cloudinary configuration before upload
-      const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-      const apiKey = process.env.CLOUDINARY_API_KEY;
-      const apiSecret = process.env.CLOUDINARY_API_SECRET;
-      
-      if (!cloudName || !apiKey || !apiSecret) {
-        console.error(`[PUT /api/vehicles/${vehicleId}] Cloudinary configuration missing`);
-        return NextResponse.json(
-          { ok: false, error: "Image upload service not configured. Please contact administrator." },
-          { status: 503 }
-        );
-      }
-      
-      // Get folder using explicit vms/ prefix pattern
-      const targetFolder = getCloudinaryFolder(category);
-      console.log(`[PUT /api/vehicles/${vehicleId}] Uploading to Cloudinary folder: ${targetFolder}`);
-      
-      try {
-        // Upload with explicit folder option
-        const uploadResult = await uploadImage(imageDataToUpload, {
-          folder: targetFolder,
-          publicId: `vehicle_${vehicleId}_${Date.now()}`,
-          tags: [category, brand, model].filter(Boolean),
-        });
-
-        console.log(`[PUT /api/vehicles/${vehicleId}] Upload result: success=${uploadResult.success}, url=${uploadResult.url ? 'present' : 'none'}, error=${uploadResult.error || 'none'}`);
-
-        if (!uploadResult.success) {
-          // Return specific error to client
-          console.error(`[PUT /api/vehicles/${vehicleId}] Image upload failed: ${uploadResult.error}`);
-          return NextResponse.json(
-            { ok: false, error: `Image upload failed: ${uploadResult.error || "Unknown error"}` },
-            { status: 502 }
-          );
-        } else {
-          // Use secure_url from Cloudinary response
-          imageId = uploadResult.url || null;
-          console.log(`✅ [PUT /api/vehicles/${vehicleId}] Image successfully uploaded to Cloudinary folder '${targetFolder}'`);
-          console.log(`[PUT /api/vehicles/${vehicleId}] Secure URL: ${imageId?.substring(0, 100)}...`);
-        }
-      } catch (uploadError) {
-        console.error(`[PUT /api/vehicles/${vehicleId}] Upload exception:`, uploadError);
-        return NextResponse.json(
-          { ok: false, error: "Image upload service error. Please try again later." },
-          { status: 502 }
-        );
-      }
-    } else {
-      console.log(`[PUT /api/vehicles/${vehicleId}] No image data to upload`);
-    }
-
-    // Prepare update data
-    const updateData: Parameters<typeof updateVehicle>[1] = {
-      category,
-      brand,
-      model,
-      year: year || new Date().getFullYear(),
-      plate: sanitizeString(body.Plate),
-      market_price: priceNew || 0,
-      tax_type: sanitizeString(body.TaxType),
-      condition: sanitizeString(body.Condition) || "New",
-      body_type: sanitizeString(body.BodyType),
-      color: sanitizeString(body.Color),
-    };
-
-    if (imageId) {
-      updateData.image_id = imageId;
-    }
-
-    // Update vehicle in database
-    const updatedVehicle = await updateVehicle(vehicleId, updateData);
-
-    if (!updatedVehicle) {
-      return NextResponse.json({ ok: false, error: "Vehicle not found" }, { status: 404 });
-    }
-
-    // Convert to API format and log the response
-    const responseVehicle = dbToVehicle(updatedVehicle);
-    const imageUrl = typeof responseVehicle.Image === "string" ? responseVehicle.Image : "";
-    console.log(`[PUT /api/vehicles/${vehicleId}] Response:`, {
-      vehicleId: responseVehicle.VehicleId,
-      hasImage: !!imageUrl,
-      imageUrl: imageUrl.substring(0, 100) + "..."
-    });
-
-    // Clear server-side cache and revalidate
-    clearCachedVehicles();
-    
-    // Revalidate Next.js cache tags
-    try {
-      revalidateTag('vehicles', {});
-      console.log(`[PUT /api/vehicles/${vehicleId}] Revalidated vehicles tag`);
-    } catch (e) {
-      console.error(`[PUT /api/vehicles/${vehicleId}] Failed to revalidate:`, e);
-    }
-    
-    return NextResponse.json({ ok: true, data: responseVehicle });
-  } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : "Unknown error";
-    console.error("[PUT /api/vehicles/[id]] Error:", message);
-    console.error("[PUT /api/vehicles/[id]] Stack:", e instanceof Error ? e.stack : "No stack trace");
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+  // This API now only accepts JSON (no FormData)
+  // Image uploads are handled directly by the frontend to Cloudinary
+  const contentType = req.headers.get("content-type") || "";
+  console.log(`[PUT /api/vehicles/${id}] Content-Type: ${contentType}`);
+  
+  if (!contentType.includes("application/json")) {
+    return NextResponse.json(
+      { ok: false, error: "This API only accepts JSON. Image uploads should be done directly to Cloudinary from the frontend." },
+      { status: 400 }
+    );
   }
+
+  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+
+  // Validate required fields (check both capitalized and lowercase keys)
+  const category = sanitizeString(body.Category) || sanitizeString(body.category);
+  const brand = sanitizeString(body.Brand) || sanitizeString(body.brand);
+  const model = sanitizeString(body.Model) || sanitizeString(body.model);
+
+  if (!category || !brand || !model) {
+    return NextResponse.json(
+      { ok: false, error: "Category, Brand, and Model are required" },
+      { status: 400 }
+    );
+  }
+
+  // Validate numeric fields (check both capitalized and lowercase keys)
+  const year = sanitizeNumber(body.Year) ?? sanitizeNumber(body.year);
+  const priceNew = sanitizeNumber(body.PriceNew) ?? sanitizeNumber(body.market_price) ?? sanitizeNumber(body.price_new);
+
+  if (year !== null && (year < 1900 || year > new Date().getFullYear() + 2)) {
+    return NextResponse.json(
+      { ok: false, error: "Invalid year" },
+      { status: 400 }
+    );
+  }
+
+  if (priceNew !== null && priceNew < 0) {
+    return NextResponse.json(
+      { ok: false, error: "Price must be positive" },
+      { status: 400 }
+    );
+  }
+
+  // Get image_id from the request (should be a Cloudinary URL from frontend)
+  // The frontend uploads directly to Cloudinary and sends us the URL
+  const imageId = sanitizeString(body.image_id) || 
+                  sanitizeString(body.imageId) || 
+                  sanitizeString(body.Image) || 
+                  null;
+
+  if (imageId) {
+    console.log(`[PUT /api/vehicles/${vehicleId}] Received image URL from frontend:`, {
+      url: imageId.substring(0, 100) + (imageId.length > 100 ? "..." : ""),
+      isCloudinary: imageId.includes('cloudinary.com'),
+    });
+  }
+
+  // Prepare update data (check both capitalized and lowercase keys)
+  const updateData: Parameters<typeof updateVehicle>[1] = {
+    category,
+    brand,
+    model,
+    year: year || new Date().getFullYear(),
+    plate: sanitizeString(body.Plate) || sanitizeString(body.plate),
+    market_price: priceNew || 0,
+    tax_type: sanitizeString(body.TaxType) || sanitizeString(body.tax_type),
+    condition: sanitizeString(body.Condition) || sanitizeString(body.condition) || "New",
+    body_type: sanitizeString(body.BodyType) || sanitizeString(body.body_type),
+    color: sanitizeString(body.Color) || sanitizeString(body.color),
+    thumbnail_url: sanitizeString(body.ThumbnailUrl) || sanitizeString(body.thumbnail_url) || null,
+  };
+
+  // Add image_id if provided (should be a Cloudinary URL from frontend)
+  if (imageId) {
+    updateData.image_id = imageId;
+  }
+
+  // Update vehicle in database with timeout
+  const dbStartTime = Date.now();
+  let updatedVehicle;
+  
+  try {
+    updatedVehicle = await Promise.race([
+      updateVehicle(vehicleId, updateData),
+      new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error(`Database timeout after ${DB_TIMEOUT_MS}ms`)), DB_TIMEOUT_MS)
+      )
+    ]);
+    
+    const dbDuration = Date.now() - dbStartTime;
+    console.log(`[PUT /api/vehicles/${vehicleId}] Database update completed in ${dbDuration}ms`);
+  } catch (dbError) {
+    const dbDuration = Date.now() - dbStartTime;
+    const errorMessage = dbError instanceof Error ? dbError.message : "Unknown database error";
+    console.error(`[PUT /api/vehicles/${vehicleId}] Database update failed after ${dbDuration}ms:`, errorMessage);
+    
+    return NextResponse.json(
+      { 
+        ok: false, 
+        error: `Database update failed: ${errorMessage}`,
+        details: {
+          type: "database_error",
+          message: errorMessage,
+          dbDuration: dbDuration
+        }
+      },
+      { status: 503 }
+    );
+  }
+
+  if (!updatedVehicle) {
+    return NextResponse.json({ ok: false, error: "Vehicle not found" }, { status: 404 });
+  }
+
+  // Convert to API format and log the response
+  const responseVehicle = dbToVehicle(updatedVehicle);
+  const imageUrl = typeof responseVehicle.Image === "string" ? responseVehicle.Image : "";
+  console.log(`[PUT /api/vehicles/${vehicleId}] Response:`, {
+    vehicleId: responseVehicle.VehicleId,
+    hasImage: !!imageUrl,
+    imageUrl: imageUrl.substring(0, 100) + "..."
+  });
+
+  // Clear server-side cache and revalidate
+  clearCachedVehicles();
+  
+  // Revalidate Next.js cache tags
+  try {
+    revalidateTag('vehicles', {});
+    console.log(`[PUT /api/vehicles/${vehicleId}] Revalidated vehicles tag`);
+  } catch (e) {
+    console.error(`[PUT /api/vehicles/${vehicleId}] Failed to revalidate:`, e);
+  }
+  
+  return NextResponse.json({ ok: true, data: responseVehicle });
 }
 
 export async function DELETE(

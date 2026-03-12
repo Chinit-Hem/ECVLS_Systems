@@ -7,7 +7,7 @@ async function checkImages() {
     // Get vehicles with images
     const vehicles = await sql`
       SELECT id, image_id, brand, model, category 
-      FROM cleaned_vehicles_for_google_sheets 
+      FROM vehicles 
       WHERE image_id IS NOT NULL AND image_id != ''
       LIMIT 10
     `;
@@ -27,7 +27,7 @@ async function checkImages() {
     // Check image_id patterns
     const allWithImages = await sql`
       SELECT image_id 
-      FROM cleaned_vehicles_for_google_sheets 
+      FROM vehicles 
       WHERE image_id IS NOT NULL AND image_id != ''
     `;
     

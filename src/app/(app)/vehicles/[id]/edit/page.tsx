@@ -36,7 +36,8 @@ function EditVehicleInner() {
 
   // Hooks
   const { vehicle, loading, error: fetchError, refetch } = useVehicle(id);
-  const { vehicles: allVehicles } = useVehicles();
+  // Fetch all vehicles for navigation - use high limit to ensure current vehicle is included
+  const { vehicles: allVehicles } = useVehicles({ noCache: true, limit: 10000 });
   
   // Calculate next and previous vehicles
   const { nextVehicle, prevVehicle } = useMemo(() => {
@@ -91,7 +92,7 @@ function EditVehicleInner() {
   );
 
   // Handle form submission
-  const handleSubmit = useCallback(async (formData: Partial<Vehicle>, imageFile: File | null) => {
+  const handleSubmit = useCallback(async (formData: Partial<Vehicle>, image: File | string | null) => {
     if (!vehicle) return;
     
     setSubmitError(null);
@@ -101,6 +102,8 @@ function EditVehicleInner() {
       VehicleId: vehicle.VehicleId,
     };
     
+    // Extract File from image if it's a File, otherwise pass null
+    const imageFile = image instanceof File ? image : null;
     await updateVehicle(updateData, imageFile);
   }, [vehicle, updateVehicle]);
 

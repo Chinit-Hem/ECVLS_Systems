@@ -109,6 +109,7 @@ export async function POST(req: NextRequest) {
       body_type: body.body_type,
       color: body.color,
       image_id: body.image_id || body.image,
+      thumbnail_url: body.thumbnail_url || null,
     });
 
     

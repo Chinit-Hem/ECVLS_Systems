@@ -434,9 +434,28 @@ async function apiRequest<T>(
 
 // Vehicle API functions
 
+export interface VehicleFilters {
+  search?: string;
+  category?: string;
+  brand?: string;
+  model?: string;
+  condition?: string;
+  yearMin?: number;
+  yearMax?: number;
+  priceMin?: number;
+  priceMax?: number;
+  color?: string;
+  bodyType?: string;
+  taxType?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  withoutImage?: boolean;
+}
+
 type GetVehiclesOptions = {
   lite?: boolean;
   maxRows?: number;
+  filters?: VehicleFilters;
 };
 
 export const vehicleApi = {
@@ -448,8 +467,88 @@ export const vehicleApi = {
     const params = new URLSearchParams();
     if (noCache) params.set("noCache", "1");
     if (options.lite) params.set("lite", "1");
+    // Add maxRows/limit parameter if provided
     if (options.maxRows && Number.isFinite(options.maxRows) && options.maxRows > 0) {
-      params.set("maxRows", String(Math.trunc(options.maxRows)));
+      params.set("limit", String(Math.trunc(options.maxRows)));
+    }
+
+    // Add filter parameters if provided
+    if (options.filters) {
+      const { filters } = options;
+      
+      // Search term
+      if (filters.search?.trim()) {
+        params.set("searchTerm", filters.search.trim());
+      }
+      
+      // Category filter
+      if (filters.category && filters.category !== "All") {
+        params.set("category", filters.category);
+      }
+      
+      // Brand filter
+      if (filters.brand && filters.brand !== "All") {
+        params.set("brand", filters.brand);
+      }
+      
+      // Model filter
+      if (filters.model?.trim()) {
+        params.set("model", filters.model.trim());
+      }
+      
+      // Condition filter
+      if (filters.condition && filters.condition !== "All") {
+        params.set("condition", filters.condition);
+      }
+      
+      // Year range
+      if (filters.yearMin !== undefined && filters.yearMin !== null) {
+        params.set("yearMin", String(filters.yearMin));
+      }
+      if (filters.yearMax !== undefined && filters.yearMax !== null) {
+        params.set("yearMax", String(filters.yearMax));
+      }
+      
+      // Price range
+      if (filters.priceMin !== undefined && filters.priceMin !== null) {
+        params.set("priceMin", String(filters.priceMin));
+      }
+      if (filters.priceMax !== undefined && filters.priceMax !== null) {
+        params.set("priceMax", String(filters.priceMax));
+      }
+      
+      // Color filter
+      if (filters.color && filters.color !== "All") {
+        params.set("color", filters.color);
+      }
+      
+      // Body type filter
+      if (filters.bodyType?.trim()) {
+        params.set("bodyType", filters.bodyType.trim());
+      }
+      
+      // Tax type filter
+      if (filters.taxType?.trim()) {
+        params.set("taxType", filters.taxType.trim());
+      }
+      
+      // Date range
+      if (filters.dateFrom?.trim()) {
+        params.set("dateFrom", filters.dateFrom.trim());
+      }
+      if (filters.dateTo?.trim()) {
+        params.set("dateTo", filters.dateTo.trim());
+      }
+      
+      // Without image filter
+      if (filters.withoutImage) {
+        params.set("withoutImage", "1");
+      }
+      
+      // When filters are active and no explicit maxRows, increase limit to get all matching results
+      if (!options.maxRows && Object.keys(filters).length > 0) {
+        params.set("limit", "10000");
+      }
     }
 
     const endpoint = `/api/vehicles?${params.toString()}`;

@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuthUser } from "@/app/components/AuthContext";
 import { VehicleDetailsCard } from "@/app/components/vehicles/VehicleDetailsCard";
-import { EditVehicleModal } from "@/app/components/vehicles/EditVehicleModal";
+import { VehicleForm } from "@/app/components/vehicles/VehicleForm";
 import { GlassCard } from "@/app/components/ui/GlassCard";
 import { CardSkeleton } from "@/app/components/LoadingSkeleton";
 
@@ -363,13 +363,20 @@ function VehicleDetailInner() {
       </div>
 
       {/* Edit Modal */}
-      <EditVehicleModal
-        vehicle={vehicle}
-        isOpen={isEditModalOpen}
-        onClose={() => setIsEditModalOpen(false)}
-        onSave={handleSave}
-        isSaving={isSaving}
-      />
+      {isEditModalOpen && (
+        <VehicleForm
+          vehicle={vehicle}
+          onSubmit={async (formData, imageFile) => {
+            await handleSave({ ...formData, imageFile } as Vehicle & { imageFile?: File | null });
+          }}
+          onCancel={() => setIsEditModalOpen(false)}
+          isSubmitting={isSaving}
+          submitError={null}
+          onClearError={() => {}}
+          isModal={true}
+          modalTitle="Edit Vehicle"
+        />
+      )}
     </div>
   );
 }

@@ -17,7 +17,7 @@ async function fixAutoIncrement() {
     console.log("🔧 Fixing auto-increment for id column...\n");
 
     // Check current max id
-    const maxResult = await sql`SELECT MAX(id) as max_id FROM cleaned_vehicles_for_google_sheets`;
+    const maxResult = await sql`SELECT MAX(id) as max_id FROM vehicles`;
     const maxId = maxResult[0].max_id || 0;
     console.log(`Current max ID: ${maxId}`);
 
@@ -31,20 +31,20 @@ async function fixAutoIncrement() {
     // Set the default value for id column to use the sequence
     console.log("\n2️⃣ Setting default value for id column...");
     await sql([`
-      ALTER TABLE cleaned_vehicles_for_google_sheets 
+      ALTER TABLE vehicles 
       ALTER COLUMN id SET DEFAULT nextval('cleaned_vehicles_id_seq')
     `]);
     console.log("   ✅ Default value set");
 
     // Set the sequence to be owned by the table
     console.log("\n3️⃣ Linking sequence to table...");
-    await sql([`ALTER SEQUENCE cleaned_vehicles_id_seq OWNED BY cleaned_vehicles_for_google_sheets.id`]);
+    await sql([`ALTER SEQUENCE cleaned_vehicles_id_seq OWNED BY vehicles.id`]);
     console.log("   ✅ Sequence linked");
 
     // Test insert
     console.log("\n4️⃣ Testing insert without specifying id...");
     const testResult = await sql`
-      INSERT INTO cleaned_vehicles_for_google_sheets (
+      INSERT INTO vehicles (
         category, brand, model, year, plate, market_price,
         condition, created_at, updated_at
       ) VALUES (
@@ -57,7 +57,7 @@ async function fixAutoIncrement() {
 
     // Clean up test record
     console.log("\n5️⃣ Cleaning up test record...");
-    await sql`DELETE FROM cleaned_vehicles_for_google_sheets WHERE id = ${testResult[0].id}`;
+    await sql`DELETE FROM vehicles WHERE id = ${testResult[0].id}`;
     console.log("   ✅ Test record deleted");
 
     console.log("\n✅ Auto-increment fix completed successfully!");

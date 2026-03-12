@@ -99,5 +99,15 @@
       "path": "/api/cron/sync-vehicles",
       "schedule": "0 6 * * *"
     }
-  ]
+  ],
+  "functions": {
+    "src/app/api/vehicles/[id]/route.ts": {
+      "maxDuration": 60,
+      "memory": 1024
+    },
+    "src/app/api/upload/route.ts": {
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  }
 }

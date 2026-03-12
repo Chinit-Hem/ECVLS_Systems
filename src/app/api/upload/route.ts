@@ -209,7 +209,7 @@ function getCloudinaryFolder(category: string): string {
 async function updateVehicleImage(vehicleId: number, imageUrl: string): Promise<void> {
   try {
     await sql`
-      UPDATE "cleaned_vehicles_for_google_sheets" 
+      UPDATE "vehicles" 
       SET 
         "image_id" = ${imageUrl}, 
         "updated_at" = NOW() 

@@ -32,7 +32,7 @@ interface FiltersBarProps {
 }
 
 
-const CATEGORIES = ["All", "Cars", "Motorcycles", "Tuk Tuk"];
+const CATEGORIES = ["All", "Cars", "Motorcycles", "TukTuks"];
 const CONDITIONS = ["All", "New", "Used"];
 const FIELD_CLASS =
   "w-full rounded-xl border border-[var(--glass-border)] bg-[var(--glass-bg)] px-3 py-2.5 text-sm text-[var(--text-primary)] transition-all duration-300 ease-in-out placeholder:text-[var(--text-secondary)] focus:border-[var(--accent-green)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-green-soft)]";
@@ -261,7 +261,7 @@ export default function FiltersBar({
         <div className="relative">
           <input
             type="text"
-            placeholder="Brand, Model, or Plate..."
+            placeholder="Search all vehicle fields..."
             value={filters.search}
             onChange={(e) => handleChange("search", e.target.value)}
             className={cn(FIELD_CLASS, "pl-10")}

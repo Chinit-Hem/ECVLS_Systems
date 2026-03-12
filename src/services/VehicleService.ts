@@ -1,19 +1,29 @@
 /**
  * Vehicle Service Class - OOAD Implementation
  * 
- * Implements the Service Layer pattern with Singleton for vehicle CRUD operations.
- * Provides optimized database access with:
- * - Static methods for stateless operations (memory efficient)
+ * Extends BaseService to provide vehicle-specific CRUD operations.
+ * Implements the Service Layer pattern with Singleton for vehicle operations.
+ * 
+ * Features:
+ * - Extends BaseService for common CRUD operations
  * - Case-insensitive ILIKE filtering with TRIM() for accuracy
  * - Smart plural/singular category normalization
  * - SSR-ready POJO returns (no serialization errors)
  * - Comprehensive error handling with structured error objects
+ * - Price calculation utilities (40% and 70% depreciation)
  * 
  * @module VehicleService
  */
 
+import { BaseService, BaseFilters, ServiceResult } from "./BaseService";
 import { dbManager } from "@/lib/db-singleton";
-import type { Vehicle, VehicleMeta } from "@/lib/types";
+import type { Vehicle } from "@/lib/types";
+import { 
+  getCategorySearchPattern, 
+  buildIlikePattern,
+  normalizeCategoryToDisplay 
+} from "@/lib/categoryMapping";
+import { normalizeImageUrl } from "@/lib/cloudinary";
 
 // ============================================================================
 // Types & Interfaces
@@ -35,14 +45,41 @@ export interface VehicleDB {
   body_type: string | null;
   color: string | null;
   image_id: string | null;
+  thumbnail_url: string | null;
   created_at: string;
   updated_at: string;
 }
 
 /**
- * Vehicle filter options for queries
+ * Vehicle entity that extends BaseEntity for OOAD compatibility
+ * Maps Vehicle type to BaseEntity structure
  */
-export interface VehicleFilters {
+export interface VehicleEntity {
+  id: string;           // Maps to VehicleId
+  createdAt: string;    // Maps to Time
+  updatedAt: string;    // Maps to updated_at from DB
+  // Include all Vehicle properties
+  VehicleId: string;
+  Category: string;
+  Brand: string;
+  Model: string;
+  Year: number | null;
+  Plate: string;
+  PriceNew: number | null;
+  Price40: number | null;
+  Price70: number | null;
+  TaxType: string;
+  Condition: string;
+  BodyType: string;
+  Color: string;
+  Image: string;
+  Time: string;
+}
+
+/**
+ * Vehicle-specific filter options
+ */
+export interface VehicleFilters extends BaseFilters {
   category?: string;
   brand?: string;
   model?: string;
@@ -54,11 +91,7 @@ export interface VehicleFilters {
   color?: string;
   bodyType?: string;
   taxType?: string;
-  searchTerm?: string;
-  limit?: number;
-  offset?: number;
-  orderBy?: "id" | "brand" | "model" | "year" | "market_price" | "created_at";
-  orderDirection?: "ASC" | "DESC";
+  withoutImage?: boolean;
 }
 
 /**
@@ -83,44 +116,19 @@ export interface PaginatedResult<T> {
   totalPages: number;
 }
 
-/**
- * Service operation result with structured error handling
- */
-export interface ServiceResult<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
-  meta?: {
-    durationMs: number;
-    queryCount: number;
-  };
-}
-
-/**
- * Structured error object for consistent error handling
- */
-export interface ServiceError {
-  code: string;
-  message: string;
-  details?: string;
-  timestamp: string;
-}
-
 // ============================================================================
 // Vehicle Service Singleton Class
 // ============================================================================
 
-export class VehicleService {
+export class VehicleService extends BaseService<VehicleEntity, VehicleDB> {
   private static instance: VehicleService | null = null;
-  
-  // Cache for SSR optimization (short TTL for data freshness)
-  private cache: Map<string, { data: unknown; expiresAt: number }> = new Map();
-  private readonly DEFAULT_CACHE_TTL_MS = 5000; // 5 seconds for SSR
 
   /**
    * Private constructor - use getInstance() instead
    */
-  private constructor() {}
+  private constructor() {
+    super("VehicleService", "vehicles");
+  }
 
   /**
    * Get the singleton instance
@@ -130,6 +138,196 @@ export class VehicleService {
       VehicleService.instance = new VehicleService();
     }
     return VehicleService.instance;
+  }
+
+  // ============================================================================
+  // Abstract Method Implementations
+  // ============================================================================
+
+  /**
+   * Convert database vehicle record to entity (POJO for SSR)
+   */
+  protected toEntity(dbVehicle: VehicleDB): VehicleEntity {
+    // Safely parse market_price (handle string or number from DB)
+    const priceNew = typeof dbVehicle.market_price === "string"
+      ? parseFloat(dbVehicle.market_price) || 0
+      : (dbVehicle.market_price || 0);
+
+    // Normalize category with plural/singular handling
+    const normalizedCategory = VehicleService.normalizeCategory(dbVehicle.category);
+
+    // Use thumbnail_url if available and is a valid URL (pre-computed Google Drive thumbnail), 
+    // otherwise fall back to normalizeImageUrl for Cloudinary or runtime URL generation
+    // Check if thumbnail_url is a valid URL (starts with http://, https://, or data:)
+    const thumbnailUrl = dbVehicle.thumbnail_url?.trim();
+    const hasValidThumbnail = thumbnailUrl && (
+      thumbnailUrl.startsWith("http://") || 
+      thumbnailUrl.startsWith("https://") || 
+      thumbnailUrl.startsWith("data:")
+    );
+    const normalizedImage = hasValidThumbnail 
+      ? thumbnailUrl 
+      : normalizeImageUrl(dbVehicle.image_id);
+
+    // Create entity with both BaseEntity and Vehicle properties
+    const vehicle: VehicleEntity = {
+      // BaseEntity properties
+      id: String(dbVehicle.id),
+      createdAt: dbVehicle.created_at || new Date().toISOString(),
+      updatedAt: dbVehicle.updated_at || new Date().toISOString(),
+      
+      // Vehicle properties
+      VehicleId: String(dbVehicle.id),
+      Category: normalizedCategory,
+      Brand: dbVehicle.brand || "",
+      Model: dbVehicle.model || "",
+      Year: dbVehicle.year || null,
+      Plate: dbVehicle.plate || "",
+      PriceNew: priceNew,
+      Price40: VehicleService.derivePrice40(priceNew),
+      Price70: VehicleService.derivePrice70(priceNew),
+      TaxType: dbVehicle.tax_type || "",
+      Condition: dbVehicle.condition || "",
+      BodyType: dbVehicle.body_type || "",
+      Color: dbVehicle.color || "",
+      Image: normalizedImage,
+      Time: dbVehicle.created_at || new Date().toISOString(),
+    };
+
+    return vehicle;
+  }
+
+  /**
+   * Build cache key from filters
+   */
+  protected buildCacheKey(filters?: VehicleFilters): string {
+    if (!filters) return "vehicles:all";
+    // Sort keys for consistent cache keys
+    const sortedFilters = Object.keys(filters)
+      .sort()
+      .reduce((acc, key) => {
+        acc[key] = filters[key as keyof VehicleFilters];
+        return acc;
+      }, {} as Record<string, unknown>);
+    return `vehicles:${JSON.stringify(sortedFilters)}`;
+  }
+
+  /**
+   * Apply vehicle-specific filters to query
+   * Uses ILIKE + TRIM() for case-insensitive matching
+   */
+  protected applyFilters(
+    baseQuery: string,
+    filters: VehicleFilters,
+    params: (string | number | null)[]
+  ): { query: string; params: (string | number | null)[]; paramIndex: number } {
+    const conditions: string[] = [];
+    let paramIndex = 1;
+
+    // Filter for vehicles without images (NULL or empty string for both image_id and thumbnail_url)
+    if (filters?.withoutImage === true) {
+      conditions.push(`((image_id IS NULL OR TRIM(image_id) = '') AND (thumbnail_url IS NULL OR TRIM(thumbnail_url) = ''))`);
+    }
+
+    // Category filter with LOWER() + ILIKE + wildcards for fuzzy matching
+    // Rule 1: LOWER() for case-insensitive comparison
+    // Rule 2: ILIKE with %wildcards% for fuzzy matching
+    // Rule 3: Mapping from UI names to DB search patterns
+    if (filters?.category) {
+      const searchPattern = getCategorySearchPattern(filters.category);
+      conditions.push(`LOWER(TRIM(category)) ILIKE $${paramIndex}`);
+      params.push(searchPattern);
+      paramIndex++;
+    }
+    
+    // Brand filter with ILIKE
+    if (filters?.brand) {
+      conditions.push(`brand ILIKE $${paramIndex}`);
+      params.push(VehicleService.buildIlikePattern(filters.brand));
+      paramIndex++;
+    }
+    
+    // Model filter with ILIKE
+    if (filters?.model) {
+      conditions.push(`model ILIKE $${paramIndex}`);
+      params.push(VehicleService.buildIlikePattern(filters.model));
+      paramIndex++;
+    }
+    
+    // Condition filter
+    if (filters?.condition) {
+      const normalizedCondition = VehicleService.normalizeCondition(filters.condition);
+      conditions.push(`condition = $${paramIndex}`);
+      params.push(normalizedCondition);
+      paramIndex++;
+    }
+    
+    // Color filter with ILIKE
+    if (filters?.color) {
+      conditions.push(`color ILIKE $${paramIndex}`);
+      params.push(VehicleService.buildIlikePattern(filters.color));
+      paramIndex++;
+    }
+    
+    // Body type filter with ILIKE
+    if (filters?.bodyType) {
+      conditions.push(`body_type ILIKE $${paramIndex}`);
+      params.push(VehicleService.buildIlikePattern(filters.bodyType));
+      paramIndex++;
+    }
+    
+    // Tax type filter with ILIKE
+    if (filters?.taxType) {
+      conditions.push(`tax_type ILIKE $${paramIndex}`);
+      params.push(VehicleService.buildIlikePattern(filters.taxType));
+      paramIndex++;
+    }
+    
+    // Year range filters
+    if (filters?.yearMin !== undefined && filters.yearMin !== null) {
+      conditions.push(`year >= $${paramIndex}`);
+      params.push(filters.yearMin);
+      paramIndex++;
+    }
+    
+    if (filters?.yearMax !== undefined && filters.yearMax !== null) {
+      conditions.push(`year <= $${paramIndex}`);
+      params.push(filters.yearMax);
+      paramIndex++;
+    }
+    
+    // Price range filters
+    if (filters?.priceMin !== undefined && filters.priceMin !== null) {
+      conditions.push(`market_price >= $${paramIndex}`);
+      params.push(filters.priceMin);
+      paramIndex++;
+    }
+    
+    if (filters?.priceMax !== undefined && filters.priceMax !== null) {
+      conditions.push(`market_price <= $${paramIndex}`);
+      params.push(filters.priceMax);
+      paramIndex++;
+    }
+    
+    // Global search term - search across brand, model, plate, AND category
+    if (filters?.searchTerm) {
+      const pattern = VehicleService.buildIlikePattern(filters.searchTerm);
+      // Also create a pattern for category search using the mapping
+      const categorySearchPattern = getCategorySearchPattern(filters.searchTerm);
+      
+      conditions.push(`(brand ILIKE $${paramIndex} OR model ILIKE $${paramIndex} OR plate ILIKE $${paramIndex} OR LOWER(TRIM(category)) ILIKE $${paramIndex + 1})`);
+      params.push(pattern);
+      params.push(categorySearchPattern);
+      paramIndex += 2;
+    }
+
+    // Build WHERE clause
+    let query = baseQuery;
+    if (conditions.length > 0) {
+      query += ` WHERE ${conditions.join(" AND ")}`;
+    }
+
+    return { query, params, paramIndex };
   }
 
   // ============================================================================
@@ -149,8 +347,9 @@ export class VehicleService {
   }
 
   /**
-   * Normalize category with smart plural/singular handling
-   * Handles variations like: "Car" -> "Cars", "Tuktuks" -> "TukTuks", etc.
+   * Normalize category using case-insensitive partial matching
+   * Uses .toLowerCase().includes() for flexible matching
+   * Handles variations like: "Car", "car", "CAR", "Cars", "MyCar" all -> "Cars"
    * Static method for stateless operation
    */
   public static normalizeCategory(category: string): string {
@@ -158,44 +357,36 @@ export class VehicleService {
     
     const lower = category.toLowerCase().trim();
     
-    // Remove trailing 's' for singular matching (Cars -> Car)
-    const singular = lower.endsWith('s') ? lower.slice(0, -1) : lower;
+    // Use includes() for partial matching - more flexible than exact match
+    // Order matters: check more specific patterns first
     
-    // Car/Cars variations
-    if (lower === "car" || lower === "cars" || singular === "car") {
+    // Car variations: "car", "cars", "mycar", "supercar", etc.
+    if (lower.includes("car")) {
       return "Cars";
     }
     
-    // Motorcycle/Motorcycles variations
-    if (lower === "motorcycle" || lower === "motorcycles" || singular === "motorcycle") {
+    // Motorcycle variations: "motorcycle", "motorcycles", "motor", etc.
+    if (lower.includes("motor")) {
       return "Motorcycles";
     }
     
-    // Tuk Tuk variations (with spaces, hyphens, or concatenated)
-    if (
-      lower === "tuk tuk" || 
-      lower === "tuk-tuk" || 
-      lower === "tuktuk" || 
-      lower === "tuktuks" ||
-      lower === "tuk tuks" ||
-      singular === "tuktuk" ||
-      singular === "tuk tuk"
-    ) {
+    // Tuk Tuk variations: "tuk", "tuktuk", "tuk-tuk", etc.
+    if (lower.includes("tuk")) {
       return "TukTuks";
     }
     
-    // Truck/Trucks variations
-    if (lower === "truck" || lower === "trucks" || singular === "truck") {
+    // Truck variations: "truck", "trucks", "pickuptruck", etc.
+    if (lower.includes("truck")) {
       return "Trucks";
     }
     
-    // Van/Vans variations
-    if (lower === "van" || lower === "vans" || singular === "van") {
+    // Van variations: "van", "vans", "minivan", etc.
+    if (lower.includes("van")) {
       return "Vans";
     }
     
-    // Bus/Buses variations
-    if (lower === "bus" || lower === "buses" || singular === "bus" || lower === "buse") {
+    // Bus variations: "bus", "buses", "minibus", etc.
+    if (lower.includes("bus")) {
       return "Buses";
     }
     
@@ -241,43 +432,8 @@ export class VehicleService {
   }
 
   /**
-   * Convert database vehicle to API format (POJO for SSR)
-   * Returns plain JavaScript object to avoid serialization errors
-   * Static method for stateless operation
-   */
-  public static toVehicle(dbVehicle: VehicleDB): Vehicle {
-    // Safely parse market_price (handle string or number from DB)
-    const priceNew = typeof dbVehicle.market_price === "string"
-      ? parseFloat(dbVehicle.market_price) || 0
-      : (dbVehicle.market_price || 0);
-
-    // Normalize category with plural/singular handling
-    const normalizedCategory = VehicleService.normalizeCategory(dbVehicle.category);
-
-    // Create plain object (POJO) for SSR compatibility
-    const vehicle: Vehicle = {
-      VehicleId: String(dbVehicle.id),
-      Category: normalizedCategory,
-      Brand: dbVehicle.brand || "",
-      Model: dbVehicle.model || "",
-      Year: dbVehicle.year || null,
-      Plate: dbVehicle.plate || "",
-      PriceNew: priceNew,
-      Price40: VehicleService.derivePrice40(priceNew),
-      Price70: VehicleService.derivePrice70(priceNew),
-      TaxType: dbVehicle.tax_type || "",
-      Condition: dbVehicle.condition || "",
-      BodyType: dbVehicle.body_type || "",
-      Color: dbVehicle.color || "",
-      Image: dbVehicle.image_id || "",
-      Time: dbVehicle.created_at || new Date().toISOString(),
-    };
-
-    return vehicle;
-  }
-
-  /**
    * Build ILIKE pattern for case-insensitive partial matching
+   * Escapes special SQL characters to prevent injection
    * Static method for stateless operation
    */
   public static buildIlikePattern(searchTerm: string): string {
@@ -289,389 +445,77 @@ export class VehicleService {
     return `%${escaped}%`;
   }
 
+  // ============================================================================
+  // VEHICLE-SPECIFIC METHODS
+  // ============================================================================
+
   /**
-   * Create a structured error object
-   * Static method for stateless operation
+   * Convert VehicleEntity to legacy Vehicle format
    */
-  public static createError(code: string, message: string, details?: string): ServiceError {
+  public toVehicle(entity: VehicleEntity): Vehicle {
     return {
-      code,
-      message,
-      details,
-      timestamp: new Date().toISOString(),
+      VehicleId: entity.VehicleId,
+      Category: entity.Category,
+      Brand: entity.Brand,
+      Model: entity.Model,
+      Year: entity.Year,
+      Plate: entity.Plate,
+      PriceNew: entity.PriceNew,
+      Price40: entity.Price40,
+      Price70: entity.Price70,
+      TaxType: entity.TaxType,
+      Condition: entity.Condition,
+      BodyType: entity.BodyType,
+      Color: entity.Color,
+      Image: entity.Image,
+      Time: entity.Time,
     };
   }
 
-  // ============================================================================
-  // INSTANCE HELPER METHODS (Stateful - Require Cache Access)
-  // ============================================================================
-
   /**
-   * Build cache key from filters
-   */
-  private buildCacheKey(filters?: VehicleFilters): string {
-    if (!filters) return "vehicles:all";
-    // Sort keys for consistent cache keys
-    const sortedFilters = Object.keys(filters)
-      .sort()
-      .reduce((acc, key) => {
-        acc[key] = filters[key as keyof VehicleFilters];
-        return acc;
-      }, {} as Record<string, unknown>);
-    return `vehicles:${JSON.stringify(sortedFilters)}`;
-  }
-
-  /**
-   * Get from cache or null if expired
-   */
-  private getFromCache<T>(key: string): T | null {
-    const cached = this.cache.get(key);
-    if (!cached) return null;
-    
-    if (Date.now() > cached.expiresAt) {
-      this.cache.delete(key);
-      return null;
-    }
-    
-    return cached.data as T;
-  }
-
-  /**
-   * Set cache value with TTL
-   */
-  private setCache<T>(key: string, data: T, ttlMs?: number): void {
-    const expiresAt = Date.now() + (ttlMs || this.DEFAULT_CACHE_TTL_MS);
-    this.cache.set(key, { data, expiresAt });
-  }
-
-  /**
-   * Clear all cache
-   */
-  public clearCache(): void {
-    this.cache.clear();
-  }
-
-  /**
-   * Invalidate specific cache entry
-   */
-  public invalidateCache(key: string): void {
-    this.cache.delete(key);
-  }
-
-  // ============================================================================
-  // CRUD OPERATIONS
-  // ============================================================================
-
-  /**
-   * Get all vehicles with optional filtering
-   * Uses case-insensitive ILIKE with TRIM() for accurate text matching
-   * Returns POJOs for SSR compatibility
+   * Get vehicles with vehicle-specific filtering
+   * Returns legacy Vehicle format for backward compatibility
    */
   public async getVehicles(filters?: VehicleFilters): Promise<ServiceResult<Vehicle[]>> {
-    const startTime = Date.now();
-    const cacheKey = this.buildCacheKey(filters);
-
-    // Check cache first
-    const cached = this.getFromCache<Vehicle[]>(cacheKey);
-    if (cached) {
+    const result = await this.getAll(filters);
+    if (result.success && result.data) {
       return {
-        success: true,
-        data: cached,
-        meta: { durationMs: Date.now() - startTime, queryCount: 0 },
+        ...result,
+        data: result.data.map(e => this.toVehicle(e)),
       };
     }
-
-    try {
-      const sql = dbManager.getClient();
-      
-      let dbVehicles: VehicleDB[];
-      
-      if (!filters || Object.keys(filters).length === 0) {
-        // No filters - get all vehicles
-        const result = await dbManager.query(
-          async () => sql`SELECT * FROM cleaned_vehicles_for_google_sheets ORDER BY id ASC`,
-          { operationName: "getVehiclesAll", maxRetries: 3 }
-        );
-        dbVehicles = result as unknown as VehicleDB[];
-      } else {
-        // Build parameterized query
-        const conditions: string[] = [];
-        const params: (string | number)[] = [];
-        let paramIndex = 1;
-
-        // Category filter with ILIKE + TRIM() for case-insensitive matching
-        if (filters?.category) {
-          const normalizedCategory = VehicleService.normalizeCategory(filters.category);
-          conditions.push(`TRIM(category) ILIKE $${paramIndex}`);
-          params.push(normalizedCategory);
-          paramIndex++;
-        }
-        
-        // Brand filter with ILIKE
-        if (filters?.brand) {
-          conditions.push(`brand ILIKE $${paramIndex}`);
-          params.push(VehicleService.buildIlikePattern(filters.brand));
-          paramIndex++;
-        }
-        
-        // Model filter with ILIKE
-        if (filters?.model) {
-          conditions.push(`model ILIKE $${paramIndex}`);
-          params.push(VehicleService.buildIlikePattern(filters.model));
-          paramIndex++;
-        }
-        
-        // Condition filter
-        if (filters?.condition) {
-          const normalizedCondition = VehicleService.normalizeCondition(filters.condition);
-          conditions.push(`condition = $${paramIndex}`);
-          params.push(normalizedCondition);
-          paramIndex++;
-        }
-        
-        // Color filter with ILIKE
-        if (filters?.color) {
-          conditions.push(`color ILIKE $${paramIndex}`);
-          params.push(VehicleService.buildIlikePattern(filters.color));
-          paramIndex++;
-        }
-        
-        // Body type filter with ILIKE
-        if (filters?.bodyType) {
-          conditions.push(`body_type ILIKE $${paramIndex}`);
-          params.push(VehicleService.buildIlikePattern(filters.bodyType));
-          paramIndex++;
-        }
-        
-        // Tax type filter with ILIKE
-        if (filters?.taxType) {
-          conditions.push(`tax_type ILIKE $${paramIndex}`);
-          params.push(VehicleService.buildIlikePattern(filters.taxType));
-          paramIndex++;
-        }
-        
-        // Year range filters
-        if (filters?.yearMin !== undefined && filters.yearMin !== null) {
-          conditions.push(`year >= $${paramIndex}`);
-          params.push(filters.yearMin);
-          paramIndex++;
-        }
-        
-        if (filters?.yearMax !== undefined && filters.yearMax !== null) {
-          conditions.push(`year <= $${paramIndex}`);
-          params.push(filters.yearMax);
-          paramIndex++;
-        }
-        
-        // Price range filters
-        if (filters?.priceMin !== undefined && filters.priceMin !== null) {
-          conditions.push(`market_price >= $${paramIndex}`);
-          params.push(filters.priceMin);
-          paramIndex++;
-        }
-        
-        if (filters?.priceMax !== undefined && filters.priceMax !== null) {
-          conditions.push(`market_price <= $${paramIndex}`);
-          params.push(filters.priceMax);
-          paramIndex++;
-        }
-        
-        // Global search term
-        if (filters?.searchTerm) {
-          const pattern = VehicleService.buildIlikePattern(filters.searchTerm);
-          conditions.push(`(brand ILIKE $${paramIndex} OR model ILIKE $${paramIndex} OR plate ILIKE $${paramIndex})`);
-          params.push(pattern);
-          paramIndex++;
-        }
-
-        // For complex filtered queries, use the SQL client directly with parameterized queries
-        // Build the query using tagged template literals
-        const sql = dbManager.getClient();
-        
-        // Execute query with proper tagged template syntax
-        const result = await dbManager.query(
-          async () => {
-            if (conditions.length === 0) {
-              // No filters - simple query
-              if (filters?.limit !== undefined && filters.limit !== null) {
-                if (filters?.offset !== undefined && filters.offset !== null) {
-                  return sql`SELECT * FROM cleaned_vehicles_for_google_sheets ORDER BY id ASC LIMIT ${filters.limit} OFFSET ${filters.offset}`;
-                }
-                return sql`SELECT * FROM cleaned_vehicles_for_google_sheets ORDER BY id ASC LIMIT ${filters.limit}`;
-              }
-              return sql`SELECT * FROM cleaned_vehicles_for_google_sheets ORDER BY id ASC`;
-            } else {
-              // Build WHERE clause with ILIKE conditions
-              // Note: For complex dynamic queries with multiple optional filters,
-              // we use the sql function with array expansion for the IN clause pattern
-              let query = sql`SELECT * FROM cleaned_vehicles_for_google_sheets WHERE `;
-              
-              const conditions_sql = [];
-              if (filters?.category) {
-                const normalizedCategory = VehicleService.normalizeCategory(filters.category);
-                conditions_sql.push(sql`TRIM(category) ILIKE ${normalizedCategory}`);
-              }
-              if (filters?.brand) {
-                conditions_sql.push(sql`brand ILIKE ${'%' + filters.brand + '%'}`);
-              }
-              if (filters?.model) {
-                conditions_sql.push(sql`model ILIKE ${'%' + filters.model + '%'}`);
-              }
-              if (filters?.condition) {
-                const normalizedCondition = VehicleService.normalizeCondition(filters.condition);
-                conditions_sql.push(sql`condition = ${normalizedCondition}`);
-              }
-              if (filters?.color) {
-                conditions_sql.push(sql`color ILIKE ${'%' + filters.color + '%'}`);
-              }
-              if (filters?.bodyType) {
-                conditions_sql.push(sql`body_type ILIKE ${'%' + filters.bodyType + '%'}`);
-              }
-              if (filters?.taxType) {
-                conditions_sql.push(sql`tax_type ILIKE ${'%' + filters.taxType + '%'}`);
-              }
-              if (filters?.yearMin !== undefined && filters.yearMin !== null) {
-                conditions_sql.push(sql`year >= ${filters.yearMin}`);
-              }
-              if (filters?.yearMax !== undefined && filters.yearMax !== null) {
-                conditions_sql.push(sql`year <= ${filters.yearMax}`);
-              }
-              if (filters?.priceMin !== undefined && filters.priceMin !== null) {
-                conditions_sql.push(sql`market_price >= ${filters.priceMin}`);
-              }
-              if (filters?.priceMax !== undefined && filters.priceMax !== null) {
-                conditions_sql.push(sql`market_price <= ${filters.priceMax}`);
-              }
-              if (filters?.searchTerm) {
-                const pattern = '%' + filters.searchTerm + '%';
-                conditions_sql.push(sql`(brand ILIKE ${pattern} OR model ILIKE ${pattern} OR plate ILIKE ${pattern})`);
-              }
-              
-              // Combine conditions with AND
-              for (let i = 0; i < conditions_sql.length; i++) {
-                if (i > 0) {
-                  query = sql`${query} AND `;
-                }
-                query = sql`${query} ${conditions_sql[i]}`;
-              }
-              
-              // Add ORDER BY
-              query = sql`${query} ORDER BY id ASC`;
-              
-              // Add pagination
-              if (filters?.limit !== undefined && filters.limit !== null) {
-                if (filters?.offset !== undefined && filters.offset !== null) {
-                  query = sql`${query} LIMIT ${filters.limit} OFFSET ${filters.offset}`;
-                } else {
-                  query = sql`${query} LIMIT ${filters.limit}`;
-                }
-              }
-              
-              return query;
-            }
-          },
-          { operationName: "getVehiclesFiltered", maxRetries: 3 }
-        );
-        dbVehicles = result as unknown as VehicleDB[];
-      }
-
-      // Convert to POJOs using static method
-      const vehicles = dbVehicles.map(v => VehicleService.toVehicle(v));
-
-      // Cache result
-      this.setCache(cacheKey, vehicles);
-
-      return {
-        success: true,
-        data: vehicles,
-        meta: { durationMs: Date.now() - startTime, queryCount: 1 },
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to fetch vehicles";
-      console.error("[VehicleService.getVehicles] Error:", errorMessage);
-      
-      return {
-        success: false,
-        error: errorMessage,
-        meta: { durationMs: Date.now() - startTime, queryCount: 1 },
-      };
-    }
+    return result as ServiceResult<Vehicle[]>;
   }
 
   /**
    * Get a single vehicle by ID
-   * Returns POJO for SSR compatibility
+   * Returns legacy Vehicle format for backward compatibility
    */
   public async getVehicleById(id: number): Promise<ServiceResult<Vehicle>> {
-    const startTime = Date.now();
-
-    try {
-      const cacheKey = `vehicle:${id}`;
-      const cached = this.getFromCache<Vehicle>(cacheKey);
-      
-      if (cached) {
-        return {
-          success: true,
-          data: cached,
-          meta: { durationMs: Date.now() - startTime, queryCount: 0 },
-        };
-      }
-
-      const sql = dbManager.getClient();
-      
-      const result = await dbManager.query(
-        async () => sql`SELECT * FROM cleaned_vehicles_for_google_sheets WHERE id = ${id}`,
-        { operationName: "getVehicleById", maxRetries: 3 }
-      );
-
-      const dbResult = result as unknown as VehicleDB[];
-
-      if (dbResult.length === 0) {
-        return {
-          success: false,
-          error: `Vehicle with ID ${id} not found`,
-          meta: { durationMs: Date.now() - startTime, queryCount: 1 },
-        };
-      }
-
-      const vehicle = VehicleService.toVehicle(dbResult[0]);
-      this.setCache(cacheKey, vehicle, 10000); // Cache for 10 seconds
-
+    const result = await this.getById(id);
+    if (result.success && result.data) {
       return {
-        success: true,
-        data: vehicle,
-        meta: { durationMs: Date.now() - startTime, queryCount: 1 },
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to fetch vehicle";
-      console.error("[VehicleService.getVehicleById] Error:", errorMessage);
-      
-      return {
-        success: false,
-        error: errorMessage,
-        meta: { durationMs: Date.now() - startTime, queryCount: 1 },
+        ...result,
+        data: this.toVehicle(result.data),
       };
     }
+    return result as ServiceResult<Vehicle>;
   }
 
   /**
    * Get a single vehicle by plate number (case-insensitive)
-   * Returns POJO for SSR compatibility
+   * Vehicle-specific method
    */
   public async getVehicleByPlate(plate: string): Promise<ServiceResult<Vehicle>> {
     const startTime = Date.now();
 
     try {
-      const sql = dbManager.getClient();
-      
-      const result = await dbManager.query(
-        async () => sql`SELECT * FROM cleaned_vehicles_for_google_sheets WHERE plate ILIKE ${plate}`,
-        { operationName: "getVehicleByPlate", maxRetries: 3 }
-      );
+      // Escape plate to prevent SQL injection
+      const escapedPlate = plate.replace(/'/g, "''");
+      const query = `SELECT * FROM ${this.tableName} WHERE plate ILIKE '${escapedPlate}'`;
+      const result = await dbManager.executeUnsafe<VehicleDB>(query);
 
-      const dbResult = result as unknown as VehicleDB[];
-
-      if (dbResult.length === 0) {
+      if (result.length === 0) {
         return {
           success: false,
           error: `Vehicle with plate ${plate} not found`,
@@ -681,7 +525,7 @@ export class VehicleService {
 
       return {
         success: true,
-        data: VehicleService.toVehicle(dbResult[0]),
+        data: this.toVehicle(this.toEntity(result[0])),
         meta: { durationMs: Date.now() - startTime, queryCount: 1 },
       };
     } catch (error) {
@@ -698,354 +542,262 @@ export class VehicleService {
 
   /**
    * Create a new vehicle
-   * Returns POJO for SSR compatibility
+   * Overrides base create to handle vehicle-specific data normalization
    */
   public async createVehicle(
     vehicle: Omit<VehicleDB, "id" | "created_at" | "updated_at">
   ): Promise<ServiceResult<Vehicle>> {
-    const startTime = Date.now();
+    // Normalize category before saving
+    const normalizedCategory = VehicleService.normalizeCategory(vehicle.category);
+    
+    const data = {
+      ...vehicle,
+      category: normalizedCategory,
+    };
 
-    try {
-      const sql = dbManager.getClient();
-      const now = new Date().toISOString();
-
-      // Get next available ID
-      const maxIdResult = await dbManager.query(
-        async () => sql`SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM cleaned_vehicles_for_google_sheets`,
-        { operationName: "getNextId", maxRetries: 3 }
-      );
-
-      const nextId = (maxIdResult as unknown as { next_id: number }[])[0].next_id;
-
-      // Normalize category before saving
-      const normalizedCategory = VehicleService.normalizeCategory(vehicle.category);
-
-      // Insert vehicle
-      const result = await dbManager.query(
-        async () => sql`
-          INSERT INTO cleaned_vehicles_for_google_sheets (
-            id, category, brand, model, year, plate, market_price,
-            tax_type, condition, body_type, color, image_id,
-            created_at, updated_at
-          ) VALUES (
-            ${nextId}, ${normalizedCategory}, ${vehicle.brand}, ${vehicle.model}, 
-            ${vehicle.year || new Date().getFullYear()}, ${vehicle.plate}, ${vehicle.market_price || 0},
-            ${vehicle.tax_type}, ${vehicle.condition}, ${vehicle.body_type}, ${vehicle.color}, ${vehicle.image_id},
-            ${now}, ${now}
-          )
-          RETURNING *
-        `,
-        { operationName: "createVehicle", maxRetries: 3 }
-      );
-
-      const newVehicle = VehicleService.toVehicle((result as unknown as VehicleDB[])[0]);
-
-      // Invalidate cache
-      this.clearCache();
-
+    const result = await this.create(data);
+    if (result.success && result.data) {
       return {
-        success: true,
-        data: newVehicle,
-        meta: { durationMs: Date.now() - startTime, queryCount: 2 },
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to create vehicle";
-      console.error("[VehicleService.createVehicle] Error:", errorMessage);
-      
-      return {
-        success: false,
-        error: errorMessage,
-        meta: { durationMs: Date.now() - startTime, queryCount: 0 },
+        ...result,
+        data: this.toVehicle(result.data),
       };
     }
+    return result as ServiceResult<Vehicle>;
   }
 
   /**
    * Update a vehicle
-   * Returns POJO for SSR compatibility
+   * Overrides base update to handle vehicle-specific data normalization
    */
   public async updateVehicle(
     id: number,
     vehicle: Partial<VehicleDB>
   ): Promise<ServiceResult<Vehicle>> {
-    const startTime = Date.now();
+    // Normalize category if provided
+    const data = vehicle.category 
+      ? { ...vehicle, category: VehicleService.normalizeCategory(vehicle.category) }
+      : vehicle;
 
-    try {
-      // Normalize category if provided
-      const category = vehicle.category 
-        ? VehicleService.normalizeCategory(vehicle.category)
-        : undefined;
-
-      // Build dynamic update query using raw SQL with parameters
-      const updateFields: string[] = [];
-      const updateParams: (string | number | null)[] = [];
-      let paramIndex = 1;
-
-      if (category !== undefined) {
-        updateFields.push(`category = $${paramIndex}`);
-        updateParams.push(category);
-        paramIndex++;
-      }
-      if (vehicle.brand !== undefined) {
-        updateFields.push(`brand = $${paramIndex}`);
-        updateParams.push(vehicle.brand);
-        paramIndex++;
-      }
-      if (vehicle.model !== undefined) {
-        updateFields.push(`model = $${paramIndex}`);
-        updateParams.push(vehicle.model);
-        paramIndex++;
-      }
-      if (vehicle.year !== undefined) {
-        updateFields.push(`year = $${paramIndex}`);
-        updateParams.push(vehicle.year);
-        paramIndex++;
-      }
-      if (vehicle.plate !== undefined) {
-        updateFields.push(`plate = $${paramIndex}`);
-        updateParams.push(vehicle.plate);
-        paramIndex++;
-      }
-      if (vehicle.market_price !== undefined) {
-        updateFields.push(`market_price = $${paramIndex}`);
-        updateParams.push(vehicle.market_price);
-        paramIndex++;
-      }
-      if (vehicle.tax_type !== undefined) {
-        updateFields.push(`tax_type = $${paramIndex}`);
-        updateParams.push(vehicle.tax_type);
-        paramIndex++;
-      }
-      if (vehicle.condition !== undefined) {
-        updateFields.push(`condition = $${paramIndex}`);
-        updateParams.push(vehicle.condition);
-        paramIndex++;
-      }
-      if (vehicle.body_type !== undefined) {
-        updateFields.push(`body_type = $${paramIndex}`);
-        updateParams.push(vehicle.body_type);
-        paramIndex++;
-      }
-      if (vehicle.color !== undefined) {
-        updateFields.push(`color = $${paramIndex}`);
-        updateParams.push(vehicle.color);
-        paramIndex++;
-      }
-      if (vehicle.image_id !== undefined) {
-        updateFields.push(`image_id = $${paramIndex}`);
-        updateParams.push(vehicle.image_id);
-        paramIndex++;
-      }
-
-      // Always update updated_at
-      const now = new Date().toISOString();
-      updateFields.push(`updated_at = $${paramIndex}`);
-      updateParams.push(now);
-      paramIndex++;
-
-      // Add id for WHERE clause
-      updateParams.push(id);
-
-      if (updateFields.length === 0) {
-        return {
-          success: false,
-          error: "No fields to update",
-          meta: { durationMs: Date.now() - startTime, queryCount: 0 },
-        };
-      }
-
-      const updateQuery = `
-        UPDATE cleaned_vehicles_for_google_sheets 
-        SET ${updateFields.join(', ')}
-        WHERE id = $${paramIndex}
-        RETURNING *
-      `;
-
-      // Use sql.query for conventional parameterized queries (not tagged template)
-      const sql = dbManager.getClient();
-      const result = await dbManager.query(
-        async () => sql.query(updateQuery, updateParams),
-        { operationName: "updateVehicle", maxRetries: 3 }
-      );
-
-      const dbResult = result as unknown as VehicleDB[];
-
-      if (dbResult.length === 0) {
-        return {
-          success: false,
-          error: `Vehicle with ID ${id} not found`,
-          meta: { durationMs: Date.now() - startTime, queryCount: 1 },
-        };
-      }
-
-      const updatedVehicle = VehicleService.toVehicle(dbResult[0]);
-
-      // Invalidate cache
-      this.clearCache();
-      this.invalidateCache(`vehicle:${id}`);
-
+    const result = await this.update(id, data);
+    if (result.success && result.data) {
       return {
-        success: true,
-        data: updatedVehicle,
-        meta: { durationMs: Date.now() - startTime, queryCount: 1 },
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to update vehicle";
-      console.error("[VehicleService.updateVehicle] Error:", errorMessage);
-      
-      return {
-        success: false,
-        error: errorMessage,
-        meta: { durationMs: Date.now() - startTime, queryCount: 1 },
+        ...result,
+        data: this.toVehicle(result.data),
       };
     }
+    return result as ServiceResult<Vehicle>;
   }
 
   /**
    * Delete a vehicle
+   * Overrides base delete to provide vehicle-specific return type
    */
   public async deleteVehicle(id: number): Promise<ServiceResult<boolean>> {
-    const startTime = Date.now();
-
-    try {
-      const sql = dbManager.getClient();
-      
-      const result = await dbManager.query(
-        async () => sql`DELETE FROM cleaned_vehicles_for_google_sheets WHERE id = ${id} RETURNING id`,
-        { operationName: "deleteVehicle", maxRetries: 3 }
-      );
-
-      const deleted = (result as unknown as { id: number }[]).length > 0;
-
-      if (deleted) {
-        // Invalidate cache
-        this.clearCache();
-        this.invalidateCache(`vehicle:${id}`);
-      }
-
-      return {
-        success: true,
-        data: deleted,
-        meta: { durationMs: Date.now() - startTime, queryCount: 1 },
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to delete vehicle";
-      console.error("[VehicleService.deleteVehicle] Error:", errorMessage);
-      
-      return {
-        success: false,
-        error: errorMessage,
-        meta: { durationMs: Date.now() - startTime, queryCount: 1 },
-      };
-    }
+    return this.delete(id);
   }
 
-  // ============================================================================
-  // STATISTICS & ANALYTICS
-  // ============================================================================
-
   /**
-   * Get vehicle statistics with optimized single query
+   * Get vehicle statistics using optimized SQL query with case-insensitive grouping
+   * Uses PostgreSQL CTE for efficient counting directly in the database
    * Returns POJO for SSR compatibility
    */
-  public async getVehicleStats(): Promise<ServiceResult<VehicleStats>> {
+  public async getVehicleStats(forceRefresh = false): Promise<ServiceResult<VehicleStats>> {
     const startTime = Date.now();
 
     try {
-      const cacheKey = "vehicle:stats";
-      const cached = this.getFromCache<VehicleStats>(cacheKey);
+      const cacheKey = "vehicle:stats:v5";
       
-      if (cached) {
+      // Check cache unless force refresh is requested
+      if (!forceRefresh) {
+        const cached = this.getFromCache<VehicleStats>(cacheKey);
+        if (cached) {
+          console.log("[VehicleService.getVehicleStats] Cache hit:", cached);
+          return {
+            success: true,
+            data: cached,
+            meta: { durationMs: Date.now() - startTime, queryCount: 0 },
+          };
+        }
+      } else {
+        console.log("[VehicleService.getVehicleStats] Force refresh requested, skipping cache");
+      }
+
+      const sql = dbManager.getClient();
+
+      // Build and execute the stats query
+      // Note: thumbnail_url column may not exist in all database schemas
+      // Using only image_id for no-image count to ensure compatibility
+      const query = `
+        WITH normalized_data AS (
+          SELECT 
+            id,
+            CASE 
+              WHEN LOWER(TRIM(COALESCE(category, ''))) LIKE '%car%' THEN 'Cars'
+              WHEN LOWER(TRIM(COALESCE(category, ''))) LIKE '%motor%' THEN 'Motorcycles'
+              WHEN LOWER(TRIM(COALESCE(category, ''))) LIKE '%tuk%' THEN 'TukTuks'
+              WHEN LOWER(TRIM(COALESCE(category, ''))) LIKE '%truck%' THEN 'Trucks'
+              WHEN LOWER(TRIM(COALESCE(category, ''))) LIKE '%van%' THEN 'Vans'
+              WHEN LOWER(TRIM(COALESCE(category, ''))) LIKE '%bus%' THEN 'Buses'
+              ELSE 'Other'
+            END as normalized_category,
+            CASE 
+              WHEN LOWER(TRIM(COALESCE(condition, ''))) = 'new' THEN 'New'
+              WHEN LOWER(TRIM(COALESCE(condition, ''))) = 'used' THEN 'Used'
+              ELSE 'Other'
+            END as normalized_condition,
+            market_price,
+            image_id
+          FROM vehicles
+        )
+        SELECT 
+          COUNT(*) as total,
+          COUNT(*) FILTER (WHERE normalized_category = 'Cars') as cars_count,
+          COUNT(*) FILTER (WHERE normalized_category = 'Motorcycles') as motorcycles_count,
+          COUNT(*) FILTER (WHERE normalized_category = 'TukTuks') as tuktuks_count,
+          COUNT(*) FILTER (WHERE normalized_category = 'Trucks') as trucks_count,
+          COUNT(*) FILTER (WHERE normalized_category = 'Vans') as vans_count,
+          COUNT(*) FILTER (WHERE normalized_category = 'Buses') as buses_count,
+          COUNT(*) FILTER (WHERE normalized_category = 'Other') as other_count,
+          COUNT(*) FILTER (WHERE normalized_condition = 'New') as new_count,
+          COUNT(*) FILTER (WHERE normalized_condition = 'Used') as used_count,
+          COUNT(*) FILTER (WHERE normalized_condition = 'Other') as other_condition_count,
+          COALESCE(AVG(market_price) FILTER (WHERE market_price > 0), 0) as avg_price,
+          COUNT(*) FILTER (WHERE image_id IS NULL OR TRIM(image_id) = '') as no_image_count
+        FROM normalized_data
+      `;
+
+      console.log("[VehicleService.getVehicleStats] Executing query...");
+      console.log("[VehicleService.getVehicleStats] Query:", query.substring(0, 200) + "...");
+      
+      // Use dbManager.executeUnsafe for raw SQL queries
+      let statsResult: Array<{
+        total: string | number;
+        cars_count: string | number;
+        motorcycles_count: string | number;
+        tuktuks_count: string | number;
+        trucks_count: string | number;
+        vans_count: string | number;
+        buses_count: string | number;
+        other_count: string | number;
+        new_count: string | number;
+        used_count: string | number;
+        other_condition_count: string | number;
+        avg_price: string | number;
+        no_image_count: string | number;
+      }> | null = null;
+      
+      try {
+        statsResult = await dbManager.executeUnsafe(query);
+      } catch (queryError) {
+        console.error("[VehicleService.getVehicleStats] Query execution error:", queryError);
+        // Return fallback stats instead of throwing
+        const fallbackStats: VehicleStats = {
+          total: 0,
+          byCategory: {
+            Cars: 0,
+            Motorcycles: 0,
+            TukTuks: 0,
+            Trucks: 0,
+            Vans: 0,
+            Buses: 0,
+            Other: 0,
+          },
+          byCondition: {
+            New: 0,
+            Used: 0,
+            Other: 0,
+          },
+          avgPrice: 0,
+          noImageCount: 0,
+        };
+        
+        return {
+          success: true, // Return success with fallback data
+          data: fallbackStats,
+          meta: { durationMs: Date.now() - startTime, queryCount: 1 },
+        };
+      }
+      
+      console.log("[VehicleService.getVehicleStats] Raw result type:", typeof statsResult);
+      console.log("[VehicleService.getVehicleStats] Raw result isArray:", Array.isArray(statsResult));
+      console.log("[VehicleService.getVehicleStats] Raw result:", JSON.stringify(statsResult).substring(0, 500));
+
+      // Ensure statsResult is an array and has at least one row
+      const resultArray = Array.isArray(statsResult) ? statsResult : [statsResult];
+      if (resultArray.length === 0 || !resultArray[0]) {
+        console.warn("[VehicleService.getVehicleStats] Empty result from database, using fallback");
+        // Return fallback stats instead of throwing
+        const fallbackStats: VehicleStats = {
+          total: 0,
+          byCategory: {
+            Cars: 0,
+            Motorcycles: 0,
+            TukTuks: 0,
+            Trucks: 0,
+            Vans: 0,
+            Buses: 0,
+            Other: 0,
+          },
+          byCondition: {
+            New: 0,
+            Used: 0,
+            Other: 0,
+          },
+          avgPrice: 0,
+          noImageCount: 0,
+        };
+        
         return {
           success: true,
-          data: cached,
-          meta: { durationMs: Date.now() - startTime, queryCount: 0 },
+          data: fallbackStats,
+          meta: { durationMs: Date.now() - startTime, queryCount: 1 },
         };
       }
 
-      const sql = dbManager.getClient();
-
-      // Single query using CTEs for all stats
-      const result = await dbManager.query(
-        async () => sql`
-          WITH 
-            total_count AS (
-              SELECT COUNT(*) as count FROM cleaned_vehicles_for_google_sheets
-            ),
-            category_counts AS (
-              SELECT TRIM(category) as category, COUNT(*) as count 
-              FROM cleaned_vehicles_for_google_sheets 
-              GROUP BY TRIM(category)
-            ),
-            condition_counts AS (
-              SELECT condition, COUNT(*) as count 
-              FROM cleaned_vehicles_for_google_sheets 
-              GROUP BY condition
-            ),
-            price_stats AS (
-              SELECT AVG(market_price) as avg_price 
-              FROM cleaned_vehicles_for_google_sheets 
-              WHERE market_price IS NOT NULL AND market_price > 0
-            ),
-            no_image_count AS (
-              SELECT COUNT(*) as count 
-              FROM cleaned_vehicles_for_google_sheets 
-              WHERE image_id IS NULL OR image_id = ''
-            )
-          SELECT 
-            (SELECT count FROM total_count) as total,
-            (SELECT avg_price FROM price_stats) as avg_price,
-            (SELECT count FROM no_image_count) as no_image_count,
-            (SELECT json_agg(json_build_object('category', category, 'count', count)) FROM category_counts) as categories,
-            (SELECT json_agg(json_build_object('condition', condition, 'count', count)) FROM condition_counts) as conditions
-        `,
-        { operationName: "getVehicleStats", maxRetries: 3 }
-      );
-
-      const row = (result as unknown as {
-        total: string;
-        avg_price: string;
-        no_image_count: string;
-        categories: { category: string; count: string }[] | null;
-        conditions: { condition: string; count: string }[] | null;
-      }[])[0];
-      
-      const total = parseInt(row.total) || 0;
-      const avgPrice = parseFloat(row.avg_price) || 0;
-      const noImageCount = parseInt(row.no_image_count) || 0;
-
-      // Parse and normalize category counts with plural/singular handling
-      const byCategory: Record<string, number> = {};
-      if (row.categories) {
-        for (const cat of row.categories) {
-          const normalized = VehicleService.normalizeCategory(cat.category);
-          byCategory[normalized] = (byCategory[normalized] || 0) + parseInt(cat.count);
-        }
-      }
-
-      // Parse and normalize condition counts
-      const byCondition: Record<string, number> = { New: 0, Used: 0, Other: 0 };
-      if (row.conditions) {
-        for (const cond of row.conditions) {
-          const normalized = VehicleService.normalizeCondition(cond.condition);
-          byCondition[normalized] += parseInt(cond.count);
-        }
-      }
-
-      const stats: VehicleStats = {
-        total,
-        byCategory,
-        byCondition,
-        avgPrice,
-        noImageCount,
+      const row = resultArray[0] as {
+        total: string | number;
+        cars_count: string | number;
+        motorcycles_count: string | number;
+        tuktuks_count: string | number;
+        trucks_count: string | number;
+        vans_count: string | number;
+        buses_count: string | number;
+        other_count: string | number;
+        new_count: string | number;
+        used_count: string | number;
+        other_condition_count: string | number;
+        avg_price: string | number;
+        no_image_count: string | number;
       };
 
-      // Cache for 10 seconds
-      this.setCache(cacheKey, stats, 10000);
+      const result: VehicleStats = {
+        total: parseInt(String(row.total)) || 0,
+        byCategory: {
+          Cars: parseInt(String(row.cars_count)) || 0,
+          Motorcycles: parseInt(String(row.motorcycles_count)) || 0,
+          TukTuks: parseInt(String(row.tuktuks_count)) || 0,
+          Trucks: parseInt(String(row.trucks_count)) || 0,
+          Vans: parseInt(String(row.vans_count)) || 0,
+          Buses: parseInt(String(row.buses_count)) || 0,
+          Other: parseInt(String(row.other_count)) || 0,
+        },
+        byCondition: {
+          New: parseInt(String(row.new_count)) || 0,
+          Used: parseInt(String(row.used_count)) || 0,
+          Other: parseInt(String(row.other_condition_count)) || 0,
+        },
+        avgPrice: Math.round((parseFloat(String(row.avg_price)) || 0) * 100) / 100,
+        noImageCount: parseInt(String(row.no_image_count)) || 0,
+      };
+
+      console.log("[VehicleService.getVehicleStats] Parsed result:", result);
+
+      // Cache for 30 seconds using extended TTL (stats don't change frequently)
+      this.setCache(cacheKey, result, this.STATS_CACHE_TTL_MS);
 
       return {
         success: true,
-        data: stats,
+        data: result,
         meta: { durationMs: Date.now() - startTime, queryCount: 1 },
       };
     } catch (error) {
@@ -1068,16 +820,14 @@ export class VehicleService {
     const startTime = Date.now();
 
     try {
-      const sql = dbManager.getClient();
-      
-      const result = await dbManager.query(
-        async () => sql`SELECT COUNT(*) as count FROM cleaned_vehicles_for_google_sheets`,
-        { operationName: "getVehicleStatsLite", maxRetries: 3 }
-      );
+      const query = `SELECT COUNT(*) as count FROM ${this.tableName}`;
+      const result = await dbManager.executeUnsafe<{ count: string | number }>(query);
+
+      const count = result[0]?.count || 0;
 
       return {
         success: true,
-        data: { total: parseInt((result as unknown as { count: string }[])[0].count) || 0 },
+        data: { total: parseInt(String(count)) || 0 },
         meta: { durationMs: Date.now() - startTime, queryCount: 1 },
       };
     } catch (error) {
@@ -1092,9 +842,65 @@ export class VehicleService {
     }
   }
 
-  // ============================================================================
-  // SEARCH OPERATIONS
-  // ============================================================================
+  /**
+   * Get filtered count - returns count matching the same filters as getVehicles
+   * This ensures the count matches the actual filtered results
+   */
+  public async countWithFilters(filters?: VehicleFilters): Promise<ServiceResult<number>> {
+    const startTime = Date.now();
+
+    try {
+      // Build base query for counting
+      let query = `SELECT COUNT(*) as count FROM ${this.tableName}`;
+      let params: (string | number | null)[] = [];
+      let paramIndex = 1;
+
+      // Apply the same filters as getVehicles for consistency
+      if (filters && Object.keys(filters).length > 0) {
+        const filterResult = this.applyFilters(query, filters, params);
+        query = filterResult.query;
+        params = filterResult.params;
+        paramIndex = filterResult.paramIndex;
+      }
+
+      // Build final query with inline parameters
+      let finalQuery = query;
+      for (let i = 0; i < params.length; i++) {
+        const param = params[i];
+        const placeholder = `$${i + 1}`;
+        let replacement: string;
+        
+        if (param === null) {
+          replacement = 'NULL';
+        } else if (typeof param === 'number') {
+          replacement = String(param);
+        } else {
+          replacement = `'${String(param).replace(/'/g, "''")}'`;
+        }
+        
+        const placeholderRegex = new RegExp(placeholder.replace(/\$/g, '\\$'), 'g');
+        finalQuery = finalQuery.replace(placeholderRegex, replacement);
+      }
+
+      const result = await dbManager.executeUnsafe<{ count: string | number }>(finalQuery);
+      const count = parseInt(String(result[0]?.count)) || 0;
+
+      return {
+        success: true,
+        data: count,
+        meta: { durationMs: Date.now() - startTime, queryCount: 1 },
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to count vehicles with filters";
+      console.error("[VehicleService.countWithFilters] Error:", errorMessage);
+      
+      return {
+        success: false,
+        error: errorMessage,
+        meta: { durationMs: Date.now() - startTime, queryCount: 1 },
+      };
+    }
+  }
 
   /**
    * Search vehicles by text with case-insensitive ILIKE
@@ -1104,41 +910,37 @@ export class VehicleService {
     const startTime = Date.now();
 
     try {
-      const sql = dbManager.getClient();
-      const pattern = VehicleService.buildIlikePattern(searchTerm);
+      // Escape search term to prevent SQL injection
+      const escapedTerm = searchTerm.replace(/'/g, "''");
+      const pattern = VehicleService.buildIlikePattern(escapedTerm);
+      // Also search by normalized category
+      const normalizedCategory = VehicleService.normalizeCategory(searchTerm);
+      const categoryPattern = VehicleService.buildIlikePattern(normalizedCategory);
       
       // Build the query based on whether limit is provided
-      let result;
+      // Use inline parameters instead of $1, $2 for Neon compatibility
+      let query: string;
+      
       if (limit !== undefined && limit !== null) {
-        result = await dbManager.query(
-          async () => sql`
-            SELECT * FROM cleaned_vehicles_for_google_sheets 
-            WHERE 
-              brand ILIKE ${pattern} OR
-              model ILIKE ${pattern} OR
-              plate ILIKE ${pattern}
-            ORDER BY brand, model
-            LIMIT ${limit}
-          `,
-          { operationName: "searchVehiclesWithLimit", maxRetries: 3 }
-        );
+        query = `
+          SELECT * FROM ${this.tableName} 
+          WHERE brand ILIKE '${pattern}' OR model ILIKE '${pattern}' OR plate ILIKE '${pattern}' OR category ILIKE '${categoryPattern}'
+          ORDER BY brand, model
+          LIMIT ${limit}
+        `;
       } else {
-        result = await dbManager.query(
-          async () => sql`
-            SELECT * FROM cleaned_vehicles_for_google_sheets 
-            WHERE 
-              brand ILIKE ${pattern} OR
-              model ILIKE ${pattern} OR
-              plate ILIKE ${pattern}
-            ORDER BY brand, model
-          `,
-          { operationName: "searchVehicles", maxRetries: 3 }
-        );
+        query = `
+          SELECT * FROM ${this.tableName} 
+          WHERE brand ILIKE '${pattern}' OR model ILIKE '${pattern}' OR plate ILIKE '${pattern}' OR category ILIKE '${categoryPattern}'
+          ORDER BY brand, model
+        `;
       }
+
+      const result = await dbManager.executeUnsafe<VehicleDB>(query);
 
       return {
         success: true,
-        data: (result as unknown as VehicleDB[]).map(v => VehicleService.toVehicle(v)),
+        data: result.map(v => this.toVehicle(this.toEntity(v))),
         meta: { durationMs: Date.now() - startTime, queryCount: 1 },
       };
     } catch (error) {

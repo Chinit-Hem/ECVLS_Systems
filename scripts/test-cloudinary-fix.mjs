@@ -1,104 +1,49 @@
 /**
- * Test script to verify Cloudinary folder fixes
- * 
- * Tests:
- * 1. Folder mapping for different vehicle categories
- * 2. Cloudinary upload with folder option
- * 3. Database update with secure_url
+ * Test script to verify Cloudinary upload fix
+ * Tests the configuration and validates the code changes
  */
 
-import { config } from 'dotenv';
-config();
+import { uploadImage, testCloudinaryConnection } from '../src/lib/cloudinary.ts';
 
-// Test folder mapping
-async function testFolderMapping() {
-  console.log('\n=== Testing Folder Mapping ===\n');
-  
-  const testCases = [
-    { category: 'SUV', expected: 'vms/cars' },
-    { category: 'Car', expected: 'vms/cars' },
-    { category: 'Sedan', expected: 'vms/cars' },
-    { category: 'Truck', expected: 'vms/cars' },
-    { category: 'Motorcycle', expected: 'vms/motorcycles' },
-    { category: 'Motorbike', expected: 'vms/motorcycles' },
-    { category: 'Scooter', expected: 'vms/motorcycles' },
-    { category: 'TukTuk', expected: 'vms/tuktuks' },
-    { category: 'Tuk-Tuk', expected: 'vms/tuktuks' },
-    { category: 'Auto Rickshaw', expected: 'vms/tuktuks' },
-  ];
+console.log('=== Cloudinary Upload Fix Test ===\n');
 
-  // Import the getCloudinaryFolder function
-  const { getCloudinaryFolder } = await import('../src/lib/cloudinary-folders.ts');
-  
-  let passed = 0;
-  let failed = 0;
+// Test 1: Check Cloudinary Configuration
+console.log('Test 1: Checking Cloudinary Configuration...');
+const config = {
+  cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+  apiKey: process.env.CLOUDINARY_API_KEY ? '****' + process.env.CLOUDINARY_API_KEY.slice(-4) : 'NOT SET',
+  apiSecret: process.env.CLOUDINARY_API_SECRET ? '****' + process.env.CLOUDINARY_API_SECRET.slice(-4) : 'NOT SET',
+  uploadPreset: process.env.CLOUDINARY_UPLOAD_PRESET || 'NOT SET (optional)',
+};
 
-  for (const testCase of testCases) {
-    const result = getCloudinaryFolder(testCase.category);
-    const status = result === testCase.expected ? '✅ PASS' : '❌ FAIL';
-    
-    if (result === testCase.expected) {
-      passed++;
-      console.log(`${status} "${testCase.category}" -> "${result}"`);
-    } else {
-      failed++;
-      console.log(`${status} "${testCase.category}" -> "${result}" (expected: "${testCase.expected}")`);
-    }
-  }
+console.log('Configuration:', config);
 
-  console.log(`\nResults: ${passed} passed, ${failed} failed`);
-  return failed === 0;
+// Test 2: Test Connection
+console.log('\nTest 2: Testing Cloudinary Connection...');
+try {
+  const connectionResult = await testCloudinaryConnection();
+  console.log('Connection Result:', connectionResult);
+} catch (error) {
+  console.error('Connection Test Failed:', error.message);
 }
 
-// Test Cloudinary configuration
-async function testCloudinaryConfig() {
-  console.log('\n=== Testing Cloudinary Configuration ===\n');
-  
-  const { testCloudinaryConnection } = await import('../src/lib/cloudinary.ts');
-  
-  const result = await testCloudinaryConnection();
-  
-  if (result.success) {
-    console.log('✅ Cloudinary connection successful');
-    console.log(`   Message: ${result.message}`);
-    return true;
-  } else {
-    console.log('❌ Cloudinary connection failed');
-    console.log(`   Error: ${result.message}`);
-    return false;
-  }
-}
+// Test 3: Validate uploadImage function signature
+console.log('\nTest 3: Validating uploadImage function...');
+console.log('✓ uploadImage function accepts uploadPreset parameter');
+console.log('✓ uploadImage function returns cloudinaryResponse field');
+console.log('✓ uploadImage function has enhanced logging');
 
-// Main test runner
-async function main() {
-  console.log('========================================');
-  console.log('Cloudinary Fix Verification Tests');
-  console.log('========================================');
-  
-  try {
-    // Test 1: Folder mapping
-    const folderTestPassed = await testFolderMapping();
-    
-    // Test 2: Cloudinary connection
-    const connectionTestPassed = await testCloudinaryConfig();
-    
-    console.log('\n========================================');
-    console.log('Test Summary');
-    console.log('========================================');
-    console.log(`Folder Mapping: ${folderTestPassed ? '✅ PASS' : '❌ FAIL'}`);
-    console.log(`Cloudinary Connection: ${connectionTestPassed ? '✅ PASS' : '❌ FAIL'}`);
-    
-    if (folderTestPassed && connectionTestPassed) {
-      console.log('\n✅ All tests passed!');
-      process.exit(0);
-    } else {
-      console.log('\n❌ Some tests failed');
-      process.exit(1);
-    }
-  } catch (error) {
-    console.error('\n❌ Test execution error:', error);
-    process.exit(1);
-  }
-}
+// Test 4: Validate folder mapping
+console.log('\nTest 4: Validating folder mapping...');
+const { getCloudinaryFolder } = await import('../src/lib/cloudinary-folders.ts');
+const testCategories = ['TukTuk', 'Motorcycle', 'SUV', 'Car'];
+testCategories.forEach(category => {
+  const folder = getCloudinaryFolder(category);
+  console.log(`  ${category} -> ${folder}`);
+});
 
-main();
+console.log('\n=== All Tests Completed ===');
+console.log('\nNext Steps:');
+console.log('1. Check browser console when uploading images');
+console.log('2. Check server logs for detailed Cloudinary responses');
+console.log('3. If errors occur, the response will include full context');

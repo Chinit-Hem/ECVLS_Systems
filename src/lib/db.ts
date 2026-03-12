@@ -26,9 +26,12 @@ import type { NeonQueryFunction } from "@neondatabase/serverless";
 export type { 
   VehicleFilters, 
   VehicleStats, 
-  PaginatedResult, 
-  ServiceResult 
+  PaginatedResult 
 } from "@/services/VehicleService";
+
+export type {
+  ServiceResult
+} from "@/services/BaseService";
 
 // ============================================================================
 // Singleton Database Access

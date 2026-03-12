@@ -1,52 +1,93 @@
+/**
+ * Vehicles by Brand Chart
+ * 
+ * Bar chart showing vehicle distribution by brand.
+ * Uses dynamic import with ssr: false to prevent hydration errors.
+ * 
+ * @module VehiclesByBrandChart
+ */
+
 "use client";
 
+import dynamic from "next/dynamic";
+import { useEffect, useRef, useState } from "react";
 import type { BarDatum } from "@/lib/analytics";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+
+// Dynamic import with ssr: false to prevent hydration errors
+const RechartsBarChart = dynamic(
+  () => import("./RechartsBarChart").then((mod) => mod.default),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
 
 type VehiclesByBrandChartProps = {
   data: BarDatum[];
 };
 
-function shortLabel(label: string, max = 10) {
-  const raw = String(label || "");
-  if (raw.length <= max) return raw;
-  return `${raw.slice(0, max - 1)}…`;
+function ChartSkeleton() {
+  return (
+    <div 
+      className="w-full flex items-center justify-center"
+      style={{ height: '300px' }}
+    >
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600"></div>
+    </div>
+  );
+}
+
+// Internal component that receives explicit dimensions
+function RechartsBarChartWithDimensions({ data, width, height }: { data: BarDatum[]; width: number; height: number }) {
+  const RechartsBarChart = dynamic(
+    () => import("./RechartsBarChart").then((mod) => mod.default),
+    { ssr: false }
+  );
+  return <RechartsBarChart data={data} width={width} height={height} />;
 }
 
 export default function VehiclesByBrandChart({ data }: VehiclesByBrandChartProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+    if (!containerRef.current) return;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          setDimensions({ width, height });
+        }
+      }
+    });
+
+    resizeObserver.observe(containerRef.current);
+    return () => resizeObserver.disconnect();
+  }, []);
+
   if (data.length === 0) {
-    return <div className="h-[320px] flex items-center justify-center text-sm text-[var(--muted)]">No data</div>;
+    return (
+      <div 
+        className="w-full flex items-center justify-center text-sm text-gray-500 dark:text-gray-400"
+        style={{ height: '300px' }}
+      >
+        No data available
+      </div>
+    );
   }
 
+  const hasValidDimensions = dimensions.width > 0 && dimensions.height > 0;
+
   return (
-    <div className="h-[320px]">
-      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
-        <BarChart data={data} margin={{ top: 10, right: 10, bottom: 24, left: 10 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--ec-chart-grid)" />
-          <XAxis
-            dataKey="name"
-            interval={0}
-            tick={{ fontSize: 12, fontWeight: 600, fill: "var(--ec-chart-axis)" }}
-            stroke="var(--ec-chart-grid)"
-            tickFormatter={(v) => shortLabel(String(v), 10)}
-          />
-          <YAxis allowDecimals={false} tick={{ fontSize: 12, fontWeight: 600, fill: "var(--ec-chart-axis)" }} stroke="var(--ec-chart-grid)" />
-          <Tooltip
-            formatter={(value: unknown) => [String(value), "Vehicles"]}
-            contentStyle={{
-              background: "var(--ec-chart-tooltip-bg)",
-              border: "1px solid var(--ec-chart-tooltip-border)",
-              borderRadius: "12px",
-              backdropFilter: "blur(12px)",
-              boxShadow: "0 10px 26px rgba(8, 14, 22, 0.28)",
-              color: "var(--text)",
-            }}
-            labelStyle={{ color: "var(--ec-chart-axis)", fontWeight: 700 }}
-            itemStyle={{ color: "var(--text)" }}
-          />
-          <Bar dataKey="value" fill="var(--ec-chart-emerald)" stroke="var(--ec-chart-axis)" strokeOpacity={0.18} strokeWidth={1} radius={[8, 8, 0, 0]} />
-        </BarChart>
-      </ResponsiveContainer>
+    <div 
+      ref={containerRef}
+      style={{ height: '300px', width: '100%', minHeight: '300px', minWidth: '100%' }}
+    >
+      {isMounted && hasValidDimensions ? (
+        <RechartsBarChartWithDimensions data={data} width={dimensions.width} height={dimensions.height} />
+      ) : (
+        <ChartSkeleton />
+      )}
     </div>
   );
 }

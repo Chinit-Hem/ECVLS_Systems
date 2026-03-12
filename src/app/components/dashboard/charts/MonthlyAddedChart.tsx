@@ -1,53 +1,87 @@
+/**
+ * Monthly Added Chart
+ * 
+ * Area chart showing vehicles added over time.
+ * Uses dynamic import with ssr: false to prevent hydration errors.
+ * 
+ * @module MonthlyAddedChart
+ */
+
 "use client";
 
+import dynamic from "next/dynamic";
+import { useEffect, useRef, useState } from "react";
 import type { BarDatum } from "@/lib/analytics";
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 type MonthlyAddedChartProps = {
   data: BarDatum[];
 };
 
+function ChartSkeleton() {
+  return (
+    <div 
+      className="w-full flex items-center justify-center"
+      style={{ height: '300px' }}
+    >
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600"></div>
+    </div>
+  );
+}
+
+// Internal component that receives explicit dimensions
+function RechartsAreaChartWithDimensions({ data, width, height }: { data: BarDatum[]; width: number; height: number }) {
+  const RechartsAreaChart = dynamic(
+    () => import("./RechartsAreaChart").then((mod) => mod.default),
+    { ssr: false }
+  );
+  return <RechartsAreaChart data={data} width={width} height={height} />;
+}
+
 export default function MonthlyAddedChart({ data }: MonthlyAddedChartProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+    if (!containerRef.current) return;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          setDimensions({ width, height });
+        }
+      }
+    });
+
+    resizeObserver.observe(containerRef.current);
+    return () => resizeObserver.disconnect();
+  }, []);
+
   if (data.length === 0) {
-    return <div className="h-[320px] flex items-center justify-center text-sm text-[var(--muted)]">No time data</div>;
+    return (
+      <div 
+        className="w-full flex items-center justify-center text-sm text-gray-500 dark:text-gray-400"
+        style={{ height: '300px' }}
+      >
+        No data available
+      </div>
+    );
   }
 
+  const hasValidDimensions = dimensions.width > 0 && dimensions.height > 0;
+
   return (
-    <div className="h-[320px]">
-      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
-        <AreaChart data={data} margin={{ top: 10, right: 10, bottom: 24, left: 10 }}>
-          <defs>
-            <linearGradient id="vms-area" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--ec-chart-emerald)" stopOpacity={0.45} />
-              <stop offset="100%" stopColor="var(--ec-chart-emerald)" stopOpacity={0.08} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--ec-chart-grid)" />
-          <XAxis dataKey="name" tick={{ fontSize: 12, fontWeight: 600, fill: "var(--ec-chart-axis)" }} stroke="var(--ec-chart-grid)" />
-          <YAxis allowDecimals={false} tick={{ fontSize: 12, fontWeight: 600, fill: "var(--ec-chart-axis)" }} stroke="var(--ec-chart-grid)" />
-          <Tooltip
-            formatter={(value: unknown) => [String(value), "Vehicles"]}
-            contentStyle={{
-              background: "var(--ec-chart-tooltip-bg)",
-              border: "1px solid var(--ec-chart-tooltip-border)",
-              borderRadius: "12px",
-              backdropFilter: "blur(12px)",
-              boxShadow: "0 10px 26px rgba(8, 14, 22, 0.28)",
-              color: "var(--text)",
-            }}
-            labelStyle={{ color: "var(--ec-chart-axis)", fontWeight: 700 }}
-            itemStyle={{ color: "var(--text)" }}
-          />
-          <Area
-            type="monotone"
-            dataKey="value"
-            stroke="var(--ec-chart-emerald)"
-            fill="url(#vms-area)"
-            strokeWidth={2.4}
-            activeDot={{ r: 5, fill: "var(--ec-chart-emerald)", stroke: "var(--ec-chart-axis)", strokeWidth: 1.5 }}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
+    <div 
+      ref={containerRef}
+      style={{ height: '300px', width: '100%', minHeight: '300px', minWidth: '100%' }}
+    >
+      {isMounted && hasValidDimensions ? (
+        <RechartsAreaChartWithDimensions data={data} width={dimensions.width} height={dimensions.height} />
+      ) : (
+        <ChartSkeleton />
+      )}
     </div>
   );
 }

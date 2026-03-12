@@ -19,7 +19,7 @@ async function testImageUpdateFlow() {
     console.log("🔍 Testing vehicle image update flow...\n");
     
     // 1. Get a test vehicle
-    const vehicles = await sql`SELECT * FROM cleaned_vehicles_for_google_sheets LIMIT 1`;
+    const vehicles = await sql`SELECT * FROM vehicles LIMIT 1`;
     if (vehicles.length === 0) {
       console.error("❌ No vehicles found");
       process.exit(1);
@@ -39,7 +39,7 @@ async function testImageUpdateFlow() {
     
     // 3. Update the vehicle
     const updateResult = await sql`
-      UPDATE cleaned_vehicles_for_google_sheets 
+      UPDATE vehicles 
       SET image_id = ${testImageUrl},
           updated_at = ${new Date().toISOString()}
       WHERE id = ${vehicle.id}
@@ -58,7 +58,7 @@ async function testImageUpdateFlow() {
     });
     
     // 4. Verify the update
-    const verifyResult = await sql`SELECT * FROM cleaned_vehicles_for_google_sheets WHERE id = ${vehicle.id}`;
+    const verifyResult = await sql`SELECT * FROM vehicles WHERE id = ${vehicle.id}`;
     const verifiedVehicle = verifyResult[0];
     
     console.log("\n🔍 Verification:", {
@@ -95,7 +95,7 @@ async function testImageUpdateFlow() {
     
     // 6. Restore original image
     await sql`
-      UPDATE cleaned_vehicles_for_google_sheets 
+      UPDATE vehicles 
       SET image_id = ${vehicle.image_id},
           updated_at = ${new Date().toISOString()}
       WHERE id = ${vehicle.id}

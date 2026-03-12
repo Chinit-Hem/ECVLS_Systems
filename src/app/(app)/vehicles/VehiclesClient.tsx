@@ -21,11 +21,267 @@ import { isIOSSafariBrowser } from "@/lib/platform";
 
 import { useSearchParams } from "next/navigation";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useToast } from "@/app/components/ui/GlassToast";
 import { onVehicleCacheUpdate } from "@/lib/vehicleCache";
+import { driveThumbnailUrl } from "@/lib/drive";
+import { derivePrices } from "@/lib/pricing";
+import { useRouter } from "next/navigation";
 
+// iOS Vehicle Card Component with Image, Expand, and Admin Actions
+interface IOSVehicleCardProps {
+  vehicle: Vehicle;
+  isAdmin: boolean;
+  onEdit: (vehicle: Vehicle) => void;
+  onDelete: (vehicle: Vehicle) => void;
+}
 
+function IOSVehicleCard({ vehicle, isAdmin, onEdit, onDelete }: IOSVehicleCardProps) {
+  const router = useRouter();
+  const [expanded, setExpanded] = useState(false);
+  const [imageError, setImageError] = useState(false);
+
+  const vehicleId = vehicle.VehicleId;
+  const derived = derivePrices(vehicle.PriceNew);
+  const price40 = vehicle.Price40 ?? derived.Price40;
+  const price70 = vehicle.Price70 ?? derived.Price70;
+
+  // Check if it's a full Cloudinary URL
+  const isCloudinaryUrl = vehicle.Image?.includes('res.cloudinary.com');
+  
+  // Check if it's a Cloudinary public_id (not a full URL, contains folder path like "vehicles/cars/...")
+  const isCloudinaryPublicId = vehicle.Image && 
+    !vehicle.Image.startsWith('http') && 
+    !vehicle.Image.startsWith('data:') &&
+    /^[a-zA-Z0-9_\-]+(\/[a-zA-Z0-9_\-]+)*$/.test(vehicle.Image);
+  
+  // Extract Google Drive file ID if not Cloudinary
+  const imageFileId = !isCloudinaryUrl && !isCloudinaryPublicId ? extractDriveFileId(vehicle.Image) : null;
+  
+  const thumbUrl = useMemo(() => {
+    if (isCloudinaryUrl) {
+      // Use full Cloudinary URL directly
+      return vehicle.Image;
+    }
+    
+    if (isCloudinaryPublicId && vehicle.Image) {
+      // Convert public_id to full Cloudinary URL
+      // URL format: https://res.cloudinary.com/{cloud}/image/upload/{public_id}
+      const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || 'dgntrakv6';
+      return `https://res.cloudinary.com/${cloudName}/image/upload/${vehicle.Image}`;
+    }
+    
+    // Try Google Drive
+    if (!imageFileId || imageError) return null;
+    return `${driveThumbnailUrl(imageFileId, "w300-h300")}`;
+  }, [isCloudinaryUrl, isCloudinaryPublicId, vehicle.Image, imageFileId, imageError]);
+
+  const formatPrice = (price: number | null) => {
+    if (price == null) return "-";
+    return `$${price.toLocaleString()}`;
+  };
+
+  return (
+    <div
+      className="rounded-xl bg-white p-4 shadow-sm active:scale-[0.98] transition-transform dark:bg-gray-900"
+      style={{
+        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+      }}
+    >
+      {/* Main Card Content */}
+      <div
+        className="flex gap-3 cursor-pointer"
+        onClick={() => setExpanded(!expanded)}
+      >
+        {/* Vehicle Image */}
+        <div className="flex-shrink-0">
+          {thumbUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={thumbUrl}
+              alt={`${vehicle.Brand} ${vehicle.Model}`}
+              className="h-16 w-16 rounded-xl object-cover ring-1 ring-black/10 bg-white"
+              onError={() => setImageError(true)}
+              loading="lazy"
+            />
+          ) : (
+            <div className="h-16 w-16 rounded-xl bg-gray-200 dark:bg-gray-700 flex items-center justify-center ring-1 ring-black/10">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                className="h-8 w-8 text-gray-400"
+              >
+                <rect width="18" height="18" x="3" y="3" rx="2" />
+                <circle cx="9" cy="9" r="2" />
+                <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+              </svg>
+            </div>
+          )}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <h3 className="font-semibold text-gray-900 dark:text-white truncate">
+                {vehicle.Brand || "-"} {vehicle.Model || "-"}
+              </h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                {vehicle.Year || "-"} • {vehicle.Category} • {vehicle.Plate || "-"}
+              </p>
+            </div>
+            <span
+              className={`flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                vehicle.Condition === "New"
+                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
+                  : vehicle.Condition === "Used"
+                  ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
+                  : "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300"
+              }`}
+            >
+              {vehicle.Condition || "Unknown"}
+            </span>
+          </div>
+
+          <div className="mt-2 flex items-center justify-between">
+            <div className="text-lg font-bold text-emerald-600 dark:text-emerald-400">
+              {formatPrice(vehicle.PriceNew)}
+            </div>
+            <div className="flex items-center text-gray-400 dark:text-gray-300">
+              <span className="text-xs mr-1">{expanded ? "Less" : "More"}</span>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                className={`h-4 w-4 transition-transform ${expanded ? "rotate-180" : ""}`}
+              >
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Expanded Details */}
+      {expanded && (
+        <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Vehicle ID:</span>
+              <p className="font-mono text-gray-900 dark:text-white">{vehicle.VehicleId || "-"}</p>
+            </div>
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Tax Type:</span>
+              <p className="text-gray-900 dark:text-white">{vehicle.TaxType || "-"}</p>
+            </div>
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Body Type:</span>
+              <p className="text-gray-900 dark:text-white">{vehicle.BodyType || "-"}</p>
+            </div>
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Color:</span>
+              <p className="text-gray-900 dark:text-white">{vehicle.Color || "-"}</p>
+            </div>
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">D.O.C. 40%:</span>
+              <p className="font-semibold text-orange-600 dark:text-orange-400">
+                {formatPrice(price40)}
+              </p>
+            </div>
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Vehicles 70%:</span>
+              <p className="font-semibold text-emerald-600 dark:text-emerald-400">
+                {formatPrice(price70)}
+              </p>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="mt-4 flex gap-2 pointer-events-auto">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('[iOS] View button clicked for vehicle:', vehicleId);
+                router.push(`/vehicles/${encodeURIComponent(vehicleId)}/view`);
+              }}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-emerald-50 dark:bg-emerald-900/35 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-500/30 rounded-xl font-medium active:scale-[0.98] transition-transform touch-manipulation min-h-[44px]"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                className="h-4 w-4"
+              >
+                <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              View
+            </button>
+            {isAdmin && (
+              <>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('[iOS] Edit button clicked for vehicle:', vehicleId);
+                    onEdit(vehicle);
+                  }}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-xl font-medium active:scale-[0.98] transition-transform touch-manipulation min-h-[44px]"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    className="h-4 w-4"
+                  >
+                    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z" />
+                  </svg>
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('[iOS] Delete button clicked for vehicle:', vehicleId);
+                    onDelete(vehicle);
+                  }}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-xl font-medium active:scale-[0.98] transition-transform touch-manipulation min-h-[44px]"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    className="h-4 w-4"
+                  >
+                    <path d="M3 6h18" />
+                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                  </svg>
+                  Delete
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 
 interface FilterState {
@@ -45,21 +301,31 @@ interface FilterState {
 }
 
 // Helper function to compute meta from vehicle array
-function computeVehicleMeta(vehicles: Vehicle[]): VehicleMeta {
+// Defensive programming: handles undefined/null inputs safely
+function computeVehicleMeta(vehicles: Vehicle[] | undefined | null): VehicleMeta {
+  // Safe default return for undefined/null input
+  const safeVehicles = vehicles ?? [];
+  
   return {
-    total: vehicles.length,
+    total: safeVehicles.length,
     countsByCategory: {
-      Cars: vehicles.filter(v => v.Category === "Cars").length,
-      Motorcycles: vehicles.filter(v => v.Category === "Motorcycles").length,
-      TukTuks: vehicles.filter(v => v.Category === "TukTuks").length,
+      Cars: safeVehicles.filter(v => normalizeCategoryLabel(v?.Category) === "Cars").length,
+      Motorcycles: safeVehicles.filter(v => normalizeCategoryLabel(v?.Category) === "Motorcycles").length,
+      TukTuks: safeVehicles.filter(v => normalizeCategoryLabel(v?.Category) === "TukTuks").length,
     },
-    avgPrice: vehicles.length > 0
-      ? vehicles.reduce((sum, v) => sum + (v.PriceNew || 0), 0) / vehicles.length
+    avgPrice: safeVehicles.length > 0
+      ? safeVehicles.reduce((sum, v) => sum + (v?.PriceNew || 0), 0) / safeVehicles.length
       : 0,
-    noImageCount: vehicles.filter(v => !v.Image || !extractDriveFileId(v.Image)).length,
+    noImageCount: safeVehicles.filter(v => {
+      // Check both Image field and thumbnail_url (if available in the vehicle object)
+      const hasImage = v?.Image && extractDriveFileId(v.Image);
+      // For vehicles with thumbnail_url stored separately, we need to check that too
+      // The vehicle object from API should have Image field populated with thumbnail_url if available
+      return !hasImage;
+    }).length,
     countsByCondition: {
-      New: vehicles.filter(v => v.Condition === "New").length,
-      Used: vehicles.filter(v => v.Condition === "Used").length,
+      New: safeVehicles.filter(v => normalizeConditionLabel(v?.Condition) === "New").length,
+      Used: safeVehicles.filter(v => normalizeConditionLabel(v?.Condition) === "Used").length,
     },
   };
 }
@@ -77,32 +343,14 @@ export default function VehiclesClient() {
   }, []);
 
 
-  // Use the robust vehicles hook
-  const { vehicles: fetchedVehicles, meta, loading, error, refetch, lastSyncTime } = useVehicles();
-
   // Local state for optimistic updates
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-
-  // Sync fetched vehicles with local state
-  useEffect(() => {
-    setVehicles(fetchedVehicles);
-  }, [fetchedVehicles]);
-
-  // Listen for cache updates from other components (e.g., after adding a vehicle)
-  useEffect(() => {
-    if (isIOSSafari) return;
-    const unsubscribe = onVehicleCacheUpdate((updatedVehicles) => {
-      // Update local state with fresh data from cache
-      setVehicles(updatedVehicles);
-    });
-    return unsubscribe;
-  }, [isIOSSafari]);
+  
+  // Track when optimistic updates are in progress to prevent useEffect from overwriting them
+  const optimisticUpdateInProgress = useRef(false);
 
   // View mode: "all-time" shows API meta totals, "filtered" shows filtered totals
-
-
   const [viewMode, setViewMode] = useState<"all-time" | "filtered">("all-time");
-
 
   // Filter state
   const [filters, setFilters] = useState<FilterState>({
@@ -119,6 +367,99 @@ export default function VehiclesClient() {
     dateTo: "",
     withoutImage: false,
   });
+
+  // Build API filters from UI filter state
+  const apiFilters = useMemo((): import("@/lib/api").VehicleFilters => {
+    const apiFilterParams: import("@/lib/api").VehicleFilters = {};
+    
+    if (filters.search?.trim()) {
+      apiFilterParams.search = filters.search.trim();
+    }
+    
+    if (filters.category && filters.category !== "All") {
+      apiFilterParams.category = filters.category;
+    }
+    
+    if (filters.brand && filters.brand !== "All") {
+      apiFilterParams.brand = filters.brand;
+    }
+    
+    if (filters.condition && filters.condition !== "All") {
+      apiFilterParams.condition = filters.condition;
+    }
+    
+    if (filters.color && filters.color !== "All") {
+      apiFilterParams.color = filters.color;
+    }
+    
+    if (filters.yearMin) {
+      apiFilterParams.yearMin = parseInt(filters.yearMin);
+    }
+    
+    if (filters.yearMax) {
+      apiFilterParams.yearMax = parseInt(filters.yearMax);
+    }
+    
+    if (filters.priceMin) {
+      apiFilterParams.priceMin = parseFloat(filters.priceMin);
+    }
+    
+    if (filters.priceMax) {
+      apiFilterParams.priceMax = parseFloat(filters.priceMax);
+    }
+    
+    if (filters.dateFrom) {
+      apiFilterParams.dateFrom = filters.dateFrom;
+    }
+    
+    if (filters.dateTo) {
+      apiFilterParams.dateTo = filters.dateTo;
+    }
+    
+    if (filters.withoutImage) {
+      apiFilterParams.withoutImage = true;
+    }
+    
+    return apiFilterParams;
+  }, [
+    filters.search,
+    filters.category,
+    filters.brand,
+    filters.condition,
+    filters.color,
+    filters.yearMin,
+    filters.yearMax,
+    filters.priceMin,
+    filters.priceMax,
+    filters.dateFrom,
+    filters.dateTo,
+    filters.withoutImage,
+  ]);
+
+  // Use the robust vehicles hook with server-side filtering
+  const { vehicles: fetchedVehicles, meta, loading, error, refetch, lastSyncTime, isFiltering } = useVehicles({
+    noCache: true,
+    filters: apiFilters,
+  });
+
+  // Sync fetched vehicles with local state
+  useEffect(() => {
+    // Skip sync if an optimistic update is in progress to prevent overwriting
+    if (optimisticUpdateInProgress.current) {
+      return;
+    }
+    setVehicles(fetchedVehicles);
+  }, [fetchedVehicles]);
+
+  // Listen for cache updates from other components (e.g., after adding a vehicle)
+  useEffect(() => {
+    if (isIOSSafari) return;
+    const unsubscribe = onVehicleCacheUpdate((updatedVehicles) => {
+      // Update local state with fresh data from cache
+      setVehicles(updatedVehicles);
+    });
+    return unsubscribe;
+  }, [isIOSSafari]);
 
   // Sort state
   const [sortField, setSortField] = useState<keyof Vehicle | null>("Brand");
@@ -146,16 +487,18 @@ export default function VehiclesClient() {
   // Optimistic update/delete hooks with toast notifications
 
   const { updateVehicle, isUpdating } = useUpdateVehicleOptimistic({
-    onSuccess: (vehicle) => {
-      toastSuccess(`${vehicle.Brand} ${vehicle.Model} updated successfully!`, 2000);
-      // Update local state immediately
+    onSuccess: (updatedVehicle) => {
+      optimisticUpdateInProgress.current = false;
+      toastSuccess(`${updatedVehicle.Brand} ${updatedVehicle.Model} updated successfully!`, 2000);
+      // Update local state with server-confirmed data (includes new image URL)
       setVehicles((prev) =>
-        prev.map((v) => (v.VehicleId === vehicle.VehicleId ? { ...v, ...vehicle } : v))
+        prev.map((v) => (v.VehicleId === updatedVehicle.VehicleId ? updatedVehicle : v))
       );
-      setIsAddEditModalOpen(false);
+      // Clear editing state
       setEditingVehicle(null);
     },
     onError: (error, originalVehicle) => {
+      optimisticUpdateInProgress.current = false;
       toastError(`Failed to update ${originalVehicle.Brand}: ${error.message}`, 4000);
       // Rollback: restore original vehicle
       setVehicles((prev) =>
@@ -166,13 +509,13 @@ export default function VehiclesClient() {
 
   const { deleteVehicle, isDeleting } = useDeleteVehicleOptimistic({
     onSuccess: (vehicle) => {
+      optimisticUpdateInProgress.current = false;
       toastSuccess(`${vehicle.Brand} ${vehicle.Model} deleted successfully!`, 2000);
-      // Remove from local state immediately
+      // Vehicle already removed optimistically, just ensure it's gone
       setVehicles((prev) => prev.filter((v) => v.VehicleId !== vehicle.VehicleId));
-      setIsDeleteModalOpen(false);
-      setSelectedVehicle(null);
     },
     onError: (error, restoredVehicle) => {
+      optimisticUpdateInProgress.current = false;
       toastError(`Failed to delete ${restoredVehicle.Brand}: ${error.message}`, 4000);
       // Restore: add vehicle back to list
       setVehicles((prev) => {
@@ -184,23 +527,123 @@ export default function VehiclesClient() {
 
 
 
-  // Filter and sort vehicles
-  const filteredVehicles = useMemo(() => {
-    let result = [...vehicles];
+  // Check if server-side filtering is active (any API filter is set)
+  const hasServerSideFilters = useMemo(() => {
+    return !!(
+      filters.search?.trim() ||
+      (filters.category && filters.category !== "All") ||
+      (filters.brand && filters.brand !== "All") ||
+      (filters.condition && filters.condition !== "All") ||
+      (filters.color && filters.color !== "All") ||
+      filters.yearMin ||
+      filters.yearMax ||
+      filters.priceMin ||
+      filters.priceMax ||
+      filters.dateFrom ||
+      filters.dateTo ||
+      filters.withoutImage
+    );
+  }, [filters]);
 
-    // Apply filters
+  // Filter and sort vehicles
+  // NOTE: When server-side filters are active, we skip client-side filtering
+  // because the API already returns filtered results
+  const filteredVehicles = useMemo((): Vehicle[] => {
+    let result: Vehicle[] = [...vehicles];
+
+    // When server-side filtering is active, the API already filtered the data
+    // We only need to apply sorting
+    if (hasServerSideFilters) {
+      // Apply sorting only
+      if (sortField) {
+        result.sort((a, b) => {
+          const aVal = a[sortField];
+          const bVal = b[sortField];
+
+          if (aVal === null || aVal === undefined) return sortDirection === "asc" ? 1 : -1;
+          if (bVal === null || bVal === undefined) return sortDirection === "asc" ? -1 : 1;
+
+          if (typeof aVal === "string" && typeof bVal === "string") {
+            return sortDirection === "asc"
+              ? aVal.localeCompare(bVal)
+              : bVal.localeCompare(aVal);
+          }
+
+          if (typeof aVal === "number" && typeof bVal === "number") {
+            return sortDirection === "asc" ? aVal - bVal : bVal - aVal;
+          }
+
+          return 0;
+        });
+      }
+      return result;
+    }
+
+    // Client-side filtering (when no server-side filters are active)
+    // Apply filters - Search ALL vehicle fields
     if (filters.search) {
-      const searchLower = filters.search.toLowerCase();
-      result = result.filter(
-        (v) =>
+      const searchLower = filters.search.toLowerCase().trim();
+      const searchNumber = parseFloat(filters.search);
+      
+      // Normalize search term for category matching (handles "tuk tuk" -> "TukTuks")
+      const normalizedSearchCategory = normalizeCategoryLabel(searchLower);
+      
+      // Also create a version without spaces for flexible matching
+      const searchNoSpaces = searchLower.replace(/\s+/g, '');
+      
+      result = result.filter((v) => {
+        // Normalize vehicle category
+        const normalizedVehicleCategory = normalizeCategoryLabel(v.Category);
+        
+        // Check if search matches category (using normalized values)
+        // This handles: "tuk tuk" -> "TukTuks", "car" -> "Cars", etc.
+        const categoryMatch = 
+          normalizedSearchCategory !== "Other" && normalizedSearchCategory === normalizedVehicleCategory;
+        
+        // Also check raw category string for partial matches (with and without spaces)
+        const categoryRaw = v.Category?.toLowerCase() || "";
+        const categoryPartialMatch = categoryRaw.includes(searchLower) || 
+                                     categoryRaw.includes(searchNoSpaces);
+        
+        // Check if search term without spaces matches category without spaces
+        // This handles: "tuk" matching "tuktuks", "tuk tuk" matching "tuktuks"
+        const categoryNoSpaces = categoryRaw.replace(/\s+/g, '');
+        const categoryFlexibleMatch = searchNoSpaces.length >= 2 && categoryNoSpaces.includes(searchNoSpaces);
+        
+        // Text fields to search
+        const textMatch = 
           v.Brand?.toLowerCase().includes(searchLower) ||
           v.Model?.toLowerCase().includes(searchLower) ||
-          v.Plate?.toLowerCase().includes(searchLower)
-      );
+          v.Plate?.toLowerCase().includes(searchLower) ||
+          categoryMatch ||
+          categoryPartialMatch ||
+          categoryFlexibleMatch ||
+          v.Condition?.toLowerCase().includes(searchLower) ||
+          v.Color?.toLowerCase().includes(searchLower) ||
+          v.TaxType?.toLowerCase().includes(searchLower) ||
+          v.BodyType?.toLowerCase().includes(searchLower) ||
+          v.VehicleId?.toString().toLowerCase().includes(searchLower) ||
+          v.Year?.toString().includes(searchLower);
+        
+        // Numeric fields - match if search is a valid number
+        let numberMatch = false;
+        if (!isNaN(searchNumber)) {
+          numberMatch = 
+            v.PriceNew === searchNumber ||
+            v.Price40 === searchNumber ||
+            v.Price70 === searchNumber ||
+            v.Year === searchNumber;
+        }
+        
+        return textMatch || numberMatch;
+      });
     }
 
     if (filters.category !== "All") {
-      result = result.filter((v) => normalizeCategoryLabel(v.Category) === filters.category);
+      result = result.filter((v) => {
+        const vehicleCategory = normalizeCategoryLabel(v.Category);
+        return vehicleCategory === filters.category;
+      });
     }
 
     if (filters.brand !== "All") {
@@ -243,13 +686,23 @@ export default function VehiclesClient() {
     }
 
     // Filter for vehicles without images
+    // A vehicle has no image if both image_id AND thumbnail_url are missing/empty
     if (filters.withoutImage) {
       result = result.filter((vehicle) => {
         const imageValue = vehicle.Image;
+        // Check if Image field is empty or null
         if (!imageValue || !String(imageValue).trim()) return true;
-        // Check if it's a valid Drive URL (has a file ID)
-        const fileId = extractDriveFileId(imageValue);
-        return !fileId;
+        
+        // Check if it's a valid image URL (Drive, Cloudinary, or data URL)
+        const isUrl = 
+          imageValue.startsWith('http://') || 
+          imageValue.startsWith('https://') || 
+          imageValue.startsWith('data:');
+        
+        // Check if it's a Cloudinary public_id (folder/path format like "vehicles/cars/abc123")
+        const isCloudinaryPublicId = /^[a-zA-Z0-9_\-]+(\/[a-zA-Z0-9_\-]+)*$/.test(imageValue);
+        
+        return !(isUrl || isCloudinaryPublicId);
       });
     }
 
@@ -277,7 +730,7 @@ export default function VehiclesClient() {
     }
 
     return result;
-  }, [vehicles, filters, sortField, sortDirection]);
+  }, [vehicles, filters, sortField, sortDirection, hasServerSideFilters]);
 
   // Pagination
   const totalPages = Math.ceil(filteredVehicles.length / pageSize);
@@ -346,28 +799,30 @@ export default function VehiclesClient() {
 
   // KPI calculations - use API meta for all-time, filteredMeta for filtered view
   // This fixes the mismatch: meta.total = actual count, NOT max(ID)
+  // Using double optional chaining (??) to prevent undefined errors on iPhone Safari
   const kpis = useMemo(() => {
     const isFilteredView = viewMode === "filtered" && isFiltered;
     
     if (isFilteredView) {
       return {
-        total: filteredMeta.total,
-        cars: filteredMeta.countsByCategory.Cars,
-        motorcycles: filteredMeta.countsByCategory.Motorcycles,
-        tukTuks: filteredMeta.countsByCategory.TukTuks,
-        avgPrice: filteredMeta.avgPrice,
+        total: filteredMeta?.total ?? 0,
+        cars: filteredMeta?.countsByCategory?.Cars ?? 0,
+        motorcycles: filteredMeta?.countsByCategory?.Motorcycles ?? 0,
+        tukTuks: filteredMeta?.countsByCategory?.TukTuks ?? 0,
+        avgPrice: filteredMeta?.avgPrice ?? 0,
       };
     }
     
     // All-time view: use API meta (source of truth)
+    // Defensive: ensure meta and countsByCategory exist before accessing properties
     return {
-      total: meta?.total ?? vehicles.length,
-      cars: meta?.countsByCategory.Cars ?? 0,
-      motorcycles: meta?.countsByCategory.Motorcycles ?? 0,
-      tukTuks: meta?.countsByCategory.TukTuks ?? 0,
+      total: meta?.total ?? vehicles?.length ?? 0,
+      cars: meta?.countsByCategory?.Cars ?? 0,
+      motorcycles: meta?.countsByCategory?.Motorcycles ?? 0,
+      tukTuks: meta?.countsByCategory?.TukTuks ?? 0,
       avgPrice: meta?.avgPrice ?? 0,
     };
-  }, [filteredMeta, meta, vehicles.length, viewMode, isFiltered]);
+  }, [filteredMeta, meta, vehicles, viewMode, isFiltered]);
 
 
   // Handlers
@@ -443,7 +898,7 @@ export default function VehiclesClient() {
     }
   };
 
-  const handleSaveVehicle = async (vehicleData: Partial<Vehicle>, imageFile?: File | null) => {
+  const handleSaveVehicle = async (vehicleData: Partial<Vehicle>, imageFile?: File): Promise<void> => {
     if (!editingVehicle) {
       // For new vehicles, use traditional flow
       const url = "/api/vehicles";
@@ -491,7 +946,13 @@ export default function VehiclesClient() {
       return;
     }
 
-    // For existing vehicles - use optimistic update
+    // For existing vehicles - use optimistic update with immediate modal close
+    // Close modal immediately for instant feedback
+    setIsAddEditModalOpen(false);
+    
+    // Mark optimistic update in progress to prevent useEffect from overwriting
+    optimisticUpdateInProgress.current = true;
+    
     const loadingToastId = addToast("Saving changes...", "info");
 
     // Optimistic update: update UI immediately
@@ -509,13 +970,15 @@ export default function VehiclesClient() {
       // Error is handled by onError callback (rollback happens there)
       throw err;
     }
-
-
   };
 
   const handleDeleteConfirm = async () => {
     if (!selectedVehicle?.VehicleId) return;
 
+    // Close modal immediately for instant feedback
+    setIsDeleteModalOpen(false);
+    setSelectedVehicle(null);
+    
     const loadingToastId = addToast("Deleting vehicle...", "info");
 
     // Optimistic delete: remove from UI immediately
@@ -536,102 +999,132 @@ export default function VehiclesClient() {
     const safeCurrentPage = Math.min(currentPage, safeTotalPages);
 
     return (
-      <div className="min-h-screen pb-20 lg:pb-0">
-        <div className="mx-auto max-w-4xl p-4 sm:p-6">
-          <div className="mb-4 rounded-xl border border-amber-300/70 bg-amber-50 px-4 py-3 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-900/20 dark:text-amber-200">
-            iPhone Safari compatibility mode is active.
-          </div>
+      <>
+        <div className="min-h-screen pb-20 lg:pb-0 bg-gray-50 dark:bg-gray-950">
+          <div className="mx-auto max-w-4xl p-4 sm:p-6">
+            {/* iOS Status Bar */}
+            <div className="mb-4 rounded-lg bg-emerald-600 px-4 py-3 text-white shadow-md">
+              <p className="text-xs font-medium">iOS Compatibility Mode • {filteredVehicles.length} vehicles</p>
+            </div>
 
-          <div className="mb-4 rounded-xl border border-slate-200/70 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-            <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
-              Search vehicles
-            </label>
-            <input
-              type="text"
-              value={filters.search}
-              onChange={(event) =>
-                setFilters((prev) => ({
-                  ...prev,
-                  search: event.target.value,
-                }))
-              }
-              placeholder="Brand, model, or plate"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500 dark:border-slate-600 dark:bg-slate-950 dark:text-white"
-            />
-          </div>
+            {/* iOS Search Bar */}
+            <div className="mb-4 rounded-xl bg-white p-1 shadow-sm dark:bg-gray-900">
+              <div className="flex items-center gap-2 px-3 py-2">
+                <svg className="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <input
+                  type="text"
+                  value={filters.search}
+                  onChange={(event) =>
+                    setFilters((prev) => ({
+                      ...prev,
+                      search: event.target.value,
+                    }))
+                  }
+                  placeholder="Search vehicles..."
+                  className="flex-1 bg-transparent text-sm text-gray-900 outline-none placeholder:text-gray-400 dark:text-white"
+                />
+              </div>
+            </div>
 
-          {loading ? (
-            <div className="rounded-xl border border-slate-200/70 bg-white p-6 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
-              Loading vehicles...
-            </div>
-          ) : error ? (
-            <div className="rounded-xl border border-red-300/70 bg-red-50 p-6 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-900/20 dark:text-red-200">
-              <p className="mb-3 whitespace-pre-line">{error}</p>
-              <button
-                type="button"
-                onClick={() => void refetch()}
-                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"
-              >
-                Retry
-              </button>
-            </div>
-          ) : filteredVehicles.length === 0 ? (
-            <div className="rounded-xl border border-slate-200/70 bg-white p-6 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
-              No vehicles found.
-            </div>
-          ) : (
-            <>
-              <div className="space-y-2">
-                {paginatedVehicles.map((vehicle) => (
-                  <div
-                    key={vehicle.VehicleId}
-                    className="rounded-xl border border-slate-200/70 bg-white p-3 dark:border-slate-700 dark:bg-slate-900"
+            {loading ? (
+              <div className="flex flex-col items-center justify-center rounded-2xl bg-white p-8 shadow-sm dark:bg-gray-900">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-emerald-200 border-t-emerald-600"></div>
+                <p className="mt-3 text-sm text-gray-600 dark:text-gray-400">Loading...</p>
+              </div>
+            ) : error ? (
+              <div className="rounded-2xl bg-red-50 p-6 text-center shadow-sm dark:bg-red-900/20">
+                <p className="mb-3 text-sm text-red-700 dark:text-red-300">{error}</p>
+                <button
+                  type="button"
+                  onClick={() => void refetch()}
+                  className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white shadow-md active:scale-95 transition-transform"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : filteredVehicles.length === 0 ? (
+              <div className="rounded-2xl bg-white p-8 text-center shadow-sm dark:bg-gray-900">
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-800">
+                  <svg className="h-6 w-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">No vehicles found</p>
+              </div>
+            ) : (
+              <>
+                {/* iOS Vehicle Card List with Images and Expand */}
+                <div className="space-y-3">
+                  {paginatedVehicles.map((vehicle) => (
+                    <IOSVehicleCard
+                      key={vehicle.VehicleId}
+                      vehicle={vehicle}
+                      isAdmin={isAdmin}
+                      onEdit={handleEditClick}
+                      onDelete={handleDeleteClick}
+                    />
+                  ))}
+                </div>
+
+                {/* iOS Pagination */}
+                <div className="mt-4 flex items-center justify-between rounded-xl bg-white p-3 shadow-sm dark:bg-gray-900">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                    disabled={safeCurrentPage <= 1}
+                    className="flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-medium text-gray-700 disabled:cursor-not-allowed disabled:opacity-40 active:scale-95 transition-transform dark:text-gray-300"
                   >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">
-                          {vehicle.Brand || "-"} {vehicle.Model || "-"}
-                        </p>
-                        <p className="truncate text-xs text-slate-500 dark:text-slate-300">
-                          ID {vehicle.VehicleId || "-"} • {vehicle.Category || "-"} • {vehicle.Plate || "-"}
-                        </p>
-                      </div>
-                      <a
-                        href={`/vehicles/${encodeURIComponent(vehicle.VehicleId)}/view`}
-                        className="shrink-0 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500"
-                      >
-                        View
-                      </a>
-                    </div>
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                    Prev
+                  </button>
+                  
+                  <div className="flex items-center gap-1">
+                    <span className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white">
+                      {safeCurrentPage}
+                    </span>
+                    <span className="text-sm text-gray-400">/</span>
+                    <span className="text-sm text-gray-600 dark:text-gray-400">
+                      {safeTotalPages}
+                    </span>
                   </div>
-                ))}
-              </div>
-
-              <div className="mt-4 flex items-center justify-between rounded-xl border border-slate-200/70 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-                  disabled={safeCurrentPage <= 1}
-                  className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200"
-                >
-                  Previous
-                </button>
-                <span className="text-xs text-slate-600 dark:text-slate-300">
-                  Page {safeCurrentPage} / {safeTotalPages}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((prev) => Math.min(safeTotalPages, prev + 1))}
-                  disabled={safeCurrentPage >= safeTotalPages}
-                  className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200"
-                >
-                  Next
-                </button>
-              </div>
-            </>
-          )}
+                  
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage((prev) => Math.min(safeTotalPages, prev + 1))}
+                    disabled={safeCurrentPage >= safeTotalPages}
+                    className="flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-medium text-gray-700 disabled:cursor-not-allowed disabled:opacity-40 active:scale-95 transition-transform dark:text-gray-300"
+                  >
+                    Next
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
-      </div>
+
+        {/* Modals - Added for iOS */}
+        <VehicleModal
+          isOpen={isAddEditModalOpen}
+          vehicle={selectedVehicle}
+          onClose={() => setIsAddEditModalOpen(false)}
+          onSave={handleSaveVehicle}
+        />
+
+        <DeleteConfirmationModal
+          isOpen={isDeleteModalOpen}
+          vehicle={selectedVehicle}
+          onClose={() => setIsDeleteModalOpen(false)}
+          onConfirm={handleDeleteConfirm}
+          isDeleting={isDeleting}
+        />
+      </>
     );
   }
 
@@ -808,35 +1301,6 @@ export default function VehiclesClient() {
           />
         </div>
 
-
-        {/* Category Filter Tabs */}
-        <div className="flex flex-wrap gap-2 mb-4">
-          {[
-            { key: "All", label: "All Vehicles", count: kpis.total },
-            { key: "Cars", label: "Cars", count: kpis.cars },
-            { key: "Motorcycles", label: "Motorcycles", count: kpis.motorcycles },
-        { key: "TukTuks", label: "TukTuks", count: kpis.tukTuks },
-          ].map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setFilters((prev) => ({ ...prev, category: tab.key }))}
-              className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
-                filters.category === tab.key
-                  ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20"
-                  : "bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700"
-              }`}
-            >
-              {tab.label}
-              <span className={`ml-2 px-2 py-0.5 rounded-full text-xs ${
-                filters.category === tab.key
-                  ? "bg-white/20 text-white"
-                  : "bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
-              }`}>
-                {tab.count}
-              </span>
-            </button>
-          ))}
-        </div>
 
         {/* Add Button */}
         {isAdmin && (

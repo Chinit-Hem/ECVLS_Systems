@@ -25,16 +25,16 @@ async function testConnection() {
     const versionResult = await sql`SELECT version()`;
     console.log("✅ Connected to:", versionResult[0].version);
     
-    // Test if cleaned_vehicles_for_google_sheets table exists
+    // Test if vehicles table exists
     const tables = await sql`
       SELECT table_name 
       FROM information_schema.tables 
       WHERE table_schema = 'public' 
-      AND table_name = 'cleaned_vehicles_for_google_sheets'
+      AND table_name = 'vehicles'
     `;
     
     if (tables.length === 0) {
-      console.error("❌ Table 'cleaned_vehicles_for_google_sheets' not found");
+      console.error("❌ Table 'vehicles' not found");
       console.log("\nAvailable tables:");
       const allTables = await sql`
         SELECT table_name 
@@ -46,16 +46,16 @@ async function testConnection() {
       process.exit(1);
     }
     
-    console.log("✅ Table 'cleaned_vehicles_for_google_sheets' exists");
+    console.log("✅ Table 'vehicles' exists");
     
     // Test query
-    const countResult = await sql`SELECT COUNT(*) as count FROM cleaned_vehicles_for_google_sheets`;
+    const countResult = await sql`SELECT COUNT(*) as count FROM vehicles`;
     console.log(`✅ Query successful: ${countResult[0].count} vehicles found`);
     
     // Test sample data
     const sample = await sql`
       SELECT id, category, brand, model, year, plate, market_price 
-      FROM cleaned_vehicles_for_google_sheets 
+      FROM vehicles 
       LIMIT 1
     `;
     

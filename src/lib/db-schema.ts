@@ -4,15 +4,16 @@
 
 import { vehicleService } from "@/services/VehicleService";
 import type { VehicleDB as VehicleDBType } from "@/services/VehicleService";
+import { normalizeImageUrl } from "./cloudinary";
 
 // Re-export VehicleDB type for backward compatibility
 export type VehicleDB = VehicleDBType;
 
-// Note: The cleaned_vehicles_for_google_sheets table is managed by Google Sheets sync
+// Note: The vehicles table is managed by Google Sheets sync
 // This function is kept for compatibility but doesn't create the table
 export async function createVehiclesTable(): Promise<void> {
   // Table is created by Google Sheets sync, not by the application
-  console.log("cleaned_vehicles_for_google_sheets table is managed by Google Sheets sync");
+  console.log("vehicles table is managed by Google Sheets sync");
 }
 
 // Get all vehicles (alias for getVehicles without filters)
@@ -189,6 +190,7 @@ function vehicleToDB(vehicle: Record<string, unknown>): VehicleDB {
     body_type: (vehicle.BodyType as string) || null,
     color: (vehicle.Color as string) || null,
     image_id: (vehicle.Image as string) || null,
+    thumbnail_url: (vehicle.ThumbnailUrl as string) || null,
     created_at: vehicle.Time as string,
     updated_at: vehicle.Time as string,
   };
@@ -202,6 +204,18 @@ export function toVehicle(dbVehicle: VehicleDB): Record<string, unknown> {
   
   // Normalize category to match the stats format
   const normalizedCategory = normalizeCategory(dbVehicle.category);
+  
+  // Normalize image URL - converts Cloudinary public_ids to full URLs
+  // Use thumbnail_url if available and is a valid URL, otherwise fall back to image_id
+  const thumbnailUrl = dbVehicle.thumbnail_url?.trim();
+  const hasValidThumbnail = thumbnailUrl && (
+    thumbnailUrl.startsWith("http://") || 
+    thumbnailUrl.startsWith("https://") || 
+    thumbnailUrl.startsWith("data:")
+  );
+  const normalizedImage = hasValidThumbnail 
+    ? thumbnailUrl 
+    : normalizeImageUrl(dbVehicle.image_id);
   
   return {
     VehicleId: String(dbVehicle.id),
@@ -217,7 +231,7 @@ export function toVehicle(dbVehicle: VehicleDB): Record<string, unknown> {
     Condition: dbVehicle.condition,
     BodyType: dbVehicle.body_type,
     Color: dbVehicle.color,
-    Image: dbVehicle.image_id || "",
+    Image: normalizedImage,
     Time: dbVehicle.created_at,
   };
 }

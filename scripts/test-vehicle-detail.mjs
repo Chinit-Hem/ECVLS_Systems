@@ -64,7 +64,7 @@ async function testVehicleDetail() {
     console.log("🔍 Testing vehicle detail API simulation...\n");
 
     // Get vehicle 1 from database
-    const result = await sql`SELECT * FROM cleaned_vehicles_for_google_sheets WHERE id = 1`;
+    const result = await sql`SELECT * FROM vehicles WHERE id = 1`;
     
     if (result.length === 0) {
       console.error("❌ Vehicle with ID 1 not found");

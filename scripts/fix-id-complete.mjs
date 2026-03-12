@@ -17,7 +17,7 @@ async function fixIdComplete() {
     console.log("🔧 Complete ID column fix...\n");
 
     // Step 1: Get max ID
-    const maxResult = await sql`SELECT COALESCE(MAX(id), 0) as max_id FROM cleaned_vehicles_for_google_sheets`;
+    const maxResult = await sql`SELECT COALESCE(MAX(id), 0) as max_id FROM vehicles`;
     const maxId = maxResult[0].max_id;
     console.log(`Current max ID: ${maxId}`);
 
@@ -36,7 +36,7 @@ async function fixIdComplete() {
         CREATE SEQUENCE cleaned_vehicles_id_seq START WITH ${startValue} INCREMENT BY 1;
         
         -- Set ownership
-        ALTER SEQUENCE cleaned_vehicles_id_seq OWNED BY cleaned_vehicles_for_google_sheets.id;
+        ALTER SEQUENCE cleaned_vehicles_id_seq OWNED BY vehicles.id;
       END $$;
     `;
     
@@ -50,7 +50,7 @@ async function fixIdComplete() {
     const alterScript = `
       DO $$
       BEGIN
-        ALTER TABLE cleaned_vehicles_for_google_sheets 
+        ALTER TABLE vehicles 
         ALTER COLUMN id SET DEFAULT nextval('cleaned_vehicles_id_seq');
       END $$;
     `;
@@ -63,7 +63,7 @@ async function fixIdComplete() {
     const verify = await sql`
       SELECT column_default 
       FROM information_schema.columns 
-      WHERE table_name = 'cleaned_vehicles_for_google_sheets' 
+      WHERE table_name = 'vehicles' 
       AND column_name = 'id'
     `;
     console.log("   Column default:", verify[0].column_default);
@@ -71,7 +71,7 @@ async function fixIdComplete() {
     // Step 5: Test with explicit nextval first
     console.log("\n4️⃣ Testing with explicit nextval...");
     const explicitTest = await sql`
-      INSERT INTO cleaned_vehicles_for_google_sheets (
+      INSERT INTO vehicles (
         id, category, brand, model, year, plate, market_price,
         condition, created_at, updated_at
       ) VALUES (
@@ -84,13 +84,13 @@ async function fixIdComplete() {
     console.log(`   ✅ Explicit nextval works! ID: ${explicitTest[0].id}`);
     
     // Clean up
-    await sql`DELETE FROM cleaned_vehicles_for_google_sheets WHERE id = ${explicitTest[0].id}`;
+    await sql`DELETE FROM vehicles WHERE id = ${explicitTest[0].id}`;
 
     // Step 6: Test with default
     console.log("\n5️⃣ Testing with default (no id specified)...");
     try {
       const defaultTest = await sql`
-        INSERT INTO cleaned_vehicles_for_google_sheets (
+        INSERT INTO vehicles (
           category, brand, model, year, plate, market_price,
           condition, created_at, updated_at
         ) VALUES (
@@ -102,7 +102,7 @@ async function fixIdComplete() {
       console.log(`   ✅ Default works! ID: ${defaultTest[0].id}`);
       
       // Clean up
-      await sql`DELETE FROM cleaned_vehicles_for_google_sheets WHERE id = ${defaultTest[0].id}`;
+      await sql`DELETE FROM vehicles WHERE id = ${defaultTest[0].id}`;
     } catch (e) {
       console.log(`   ❌ Default failed: ${e.message}`);
       console.log("   The sequence works but default isn't set. Using explicit nextval in API instead.");

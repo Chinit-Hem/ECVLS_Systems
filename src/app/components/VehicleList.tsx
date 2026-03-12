@@ -776,7 +776,8 @@ export default function VehicleList({ category }: VehicleListProps) {
                 } else {
                   // Try Google Drive
                   const imageFileId = extractDriveFileId(vehicle.Image);
-                  thumbUrl = imageFileId ? driveThumbnailUrl(imageFileId, "w100-h100") : vehicle.Image;
+                  // Add cache-busting timestamp to prevent stale thumbnails after update
+                  thumbUrl = imageFileId ? `${driveThumbnailUrl(imageFileId, "w100-h100")}?t=${Date.now()}` : vehicle.Image;
                 }
 
             return (
@@ -786,7 +787,7 @@ export default function VehicleList({ category }: VehicleListProps) {
                   if (!vehicleId) return;
                   router.push(`/vehicles/${encodeURIComponent(vehicleId)}/view`);
                 }}
-                className={`p-4 ${vehicleId ? "cursor-pointer touch-manipulation" : ""} transition-all duration-150 active:scale-[0.98] active:bg-black/5 select-none ${rowClass}`}
+                className={`px-6 py-4 ${vehicleId ? "cursor-pointer touch-manipulation" : ""} transition-all duration-150 active:scale-[0.98] active:bg-black/5 select-none ${rowClass}`}
                 style={{ WebkitTapHighlightColor: 'transparent' }}
               >
                 <div className="flex items-start justify-between gap-3">
@@ -798,10 +799,10 @@ export default function VehicleList({ category }: VehicleListProps) {
                         alt={`${vehicle.Brand} ${vehicle.Model}`}
                         loading="lazy"
                         decoding="async"
-                        className="h-14 w-14 rounded-xl object-cover ring-1 ring-black/10 bg-white"
+                        className="h-14 w-14 rounded-2xl object-cover ring-1 ring-black/10 bg-white"
                       />
                     ) : (
-                      <div className="h-14 w-14 rounded-xl bg-black/5 ring-1 ring-black/10" />
+                      <div className="h-14 w-14 rounded-2xl bg-black/5 ring-1 ring-black/10" />
                     )}
                   </div>
                   <div className="min-w-0">

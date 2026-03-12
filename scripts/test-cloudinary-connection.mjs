@@ -1,114 +1,133 @@
-import { config } from "dotenv";
-import { v2 as cloudinary } from "cloudinary";
+#!/usr/bin/env node
+/**
+ * Test Cloudinary connection and upload functionality
+ */
 
-config({ path: ".env.local" });
+import { v2 as cloudinary } from 'cloudinary';
+import dotenv from 'dotenv';
 
-const CLOUDINARY_URL = process.env.CLOUDINARY_URL;
+// Load environment variables
+dotenv.config();
 
-console.log("🔍 Checking Cloudinary Configuration...\n");
+const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME;
+const CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY;
+const CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET;
 
-if (!CLOUDINARY_URL) {
-  console.error("❌ CLOUDINARY_URL environment variable is not set");
-  console.log("\nPlease add the following to your .env.local file:");
-  console.log('CLOUDINARY_URL=cloudinary://API_KEY:API_SECRET@CLOUD_NAME');
+console.log('🔧 Cloudinary Configuration Check');
+console.log('=====================================');
+console.log('Cloud Name:', CLOUDINARY_CLOUD_NAME ? '✅ Set' : '❌ Not set');
+console.log('API Key:', CLOUDINARY_API_KEY ? '✅ Set' : '❌ Not set');
+console.log('API Secret:', CLOUDINARY_API_SECRET ? '✅ Set' : '❌ Not set');
+
+if (!CLOUDINARY_CLOUD_NAME || !CLOUDINARY_API_KEY || !CLOUDINARY_API_SECRET) {
+  console.error('\n❌ Cloudinary is not properly configured');
+  console.error('Please set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET');
   process.exit(1);
 }
-
-// Parse Cloudinary URL
-// Format: cloudinary://API_KEY:API_SECRET@CLOUD_NAME
-const urlMatch = CLOUDINARY_URL.match(/cloudinary:\/\/([^:]+):([^@]+)@(.+)/);
-
-if (!urlMatch) {
-  console.error("❌ Invalid CLOUDINARY_URL format");
-  console.log("Expected format: cloudinary://API_KEY:API_SECRET@CLOUD_NAME");
-  process.exit(1);
-}
-
-const [, apiKey, apiSecret, cloudName] = urlMatch;
-
-console.log("✅ Cloudinary URL parsed successfully");
-console.log(`   Cloud Name: ${cloudName}`);
-console.log(`   API Key: ${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}`);
 
 // Configure Cloudinary
 cloudinary.config({
-  cloud_name: cloudName,
-  api_key: apiKey,
-  api_secret: apiSecret,
+  cloud_name: CLOUDINARY_CLOUD_NAME,
+  api_key: CLOUDINARY_API_KEY,
+  api_secret: CLOUDINARY_API_SECRET,
   secure: true,
 });
 
-// Test connection
 async function testConnection() {
+  console.log('\n🧪 Testing Cloudinary Connection...');
+  
   try {
-    console.log("\n🔌 Testing Cloudinary connection...");
     const result = await cloudinary.api.ping();
-    console.log("✅ Cloudinary connection successful!");
-    
-    // Get account info
-    console.log("\n📋 Fetching account info...");
-    const account = await cloudinary.api.usage();
-    console.log(`   Plan: ${account.plan}`);
-    console.log(`   Last updated: ${account.last_updated}`);
-    
-    // List folders
-    console.log("\n📁 Checking folders...");
-    try {
-      const folders = await cloudinary.api.root_folders();
-      console.log("   Available root folders:");
-      folders.folders.forEach(folder => {
-        console.log(`   - ${folder.name} (${folder.path})`);
-      });
-    } catch (folderError) {
-      console.log("   Could not list folders (may require admin permissions)");
-    }
-    
+    console.log('✅ Cloudinary connection successful!');
+    console.log('   Response:', result);
     return true;
   } catch (error) {
-    console.error("❌ Cloudinary connection failed:", error.message);
+    console.error('❌ Cloudinary connection failed:', error.message);
     return false;
   }
 }
 
-// Test upload to specific folder
 async function testUpload() {
-  // Create a simple 1x1 pixel transparent PNG as base64
-  const testImageBase64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  console.log('\n🧪 Testing Cloudinary Upload (with retry logic)...');
   
-  const folders = ["CarsVMS", "MotorcyclesVMS", "TukTuksVMS"];
+  // Create a small test image (1x1 transparent PNG)
+  const testBase64Image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
   
-  for (const folder of folders) {
+  const maxRetries = 3;
+  let attempts = 0;
+  
+  while (attempts < maxRetries) {
+    attempts++;
+    console.log(`\n   Attempt ${attempts}/${maxRetries}...`);
+    
     try {
-      console.log(`\n📤 Testing upload to folder: ${folder}`);
-      const result = await cloudinary.uploader.upload(testImageBase64, {
-        folder: folder,
-        public_id: `test_${Date.now()}`,
-        resource_type: "image",
-      });
+      const result = await Promise.race([
+        cloudinary.uploader.upload(testBase64Image, {
+          folder: 'vms/test',
+          public_id: `test_${Date.now()}`,
+          resource_type: 'image',
+        }),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Upload timeout')), 30000)
+        )
+      ]);
       
-      console.log(`✅ Upload successful!`);
-      console.log(`   Public ID: ${result.public_id}`);
-      console.log(`   URL: ${result.secure_url}`);
+      console.log('✅ Upload successful!');
+      console.log('   URL:', result.secure_url);
+      console.log('   Public ID:', result.public_id);
+      console.log('   Attempts:', attempts);
       
       // Clean up - delete the test image
-      console.log(`   🗑️  Cleaning up test image...`);
-      await cloudinary.uploader.destroy(result.public_id);
-      console.log(`   ✅ Test image deleted`);
+      try {
+        await cloudinary.uploader.destroy(result.public_id);
+        console.log('   🗑️ Test image cleaned up');
+      } catch (e) {
+        console.log('   ⚠️ Could not clean up test image:', e.message);
+      }
       
+      return true;
     } catch (error) {
-      console.error(`❌ Upload to ${folder} failed:`, error.message);
+      console.error(`   ❌ Attempt ${attempts} failed:`, error.message);
+      
+      // Check if it's a transient error
+      const isTransient = error.message.includes('timeout') || 
+                          error.message.includes('502') ||
+                          error.message.includes('503') ||
+                          error.message.includes('504') ||
+                          error.message.includes('ECONNRESET');
+      
+      if (isTransient && attempts < maxRetries) {
+        const delay = 1000 * Math.pow(2, attempts - 1);
+        console.log(`   🔄 Retrying after ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+      } else {
+        console.error('\n❌ Upload failed after', attempts, 'attempt(s)');
+        return false;
+      }
     }
   }
+  
+  return false;
 }
 
-async function main() {
-  const connected = await testConnection();
-  if (connected) {
-    await testUpload();
-    console.log("\n✅ All tests completed!");
+// Run tests
+async function runTests() {
+  const connectionOk = await testConnection();
+  
+  if (connectionOk) {
+    const uploadOk = await testUpload();
+    
+    if (uploadOk) {
+      console.log('\n✅ All tests passed!');
+      process.exit(0);
+    } else {
+      console.log('\n❌ Upload test failed');
+      process.exit(1);
+    }
   } else {
-    console.log("\n❌ Connection test failed. Please check your CLOUDINARY_URL.");
+    console.log('\n❌ Connection test failed');
+    process.exit(1);
   }
 }
 
-main();
+runTests();

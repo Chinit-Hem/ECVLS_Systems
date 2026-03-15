@@ -229,6 +229,9 @@ export async function processImageForUpload(
  * Compress an image file with automatic Web Worker support
  * Uses Web Worker for non-blocking compression when available, falls back to main thread
  * 
+ * NOTE: Web Worker is disabled by default to avoid compatibility issues on mobile Safari
+ * and other environments where OffscreenCanvas may not be available or reliable.
+ * 
  * @param file - The image file to compress
  * @param options - Compression options
  * @returns Promise with compressed file and metadata
@@ -257,7 +260,7 @@ export async function compressImage(
     maxHeight = DEFAULT_MAX_HEIGHT,
     quality = DEFAULT_QUALITY,
     type = 'image/jpeg',
-    useWorker = true // Default to using worker
+    useWorker = false // DISABLED by default - use main thread for better compatibility
   } = options;
 
   // Check if we should use Web Worker
@@ -289,7 +292,7 @@ export async function compressImage(
       if (!workerSupported) {
         console.log('[ClientCompression] Web Worker not supported, using main thread');
       } else {
-        console.log('[ClientCompression] Worker disabled, using main thread');
+        console.log('[ClientCompression] Worker disabled for compatibility, using main thread');
       }
       
       result = await compressImageMainThread(file, {
@@ -410,19 +413,19 @@ export function compressImageProgressive(
   }>;
 } {
   // Quick compression for immediate use (lower quality, smaller size)
+  // useWorker defaults to false in compressImage for compatibility
   const quick = compressImage(file, {
     maxWidth: 400, // Small for fast processing
     maxHeight: 400,
-    quality: 0.6,
-    useWorker: true
+    quality: 0.6
   });
   
   // Full compression for upload (higher quality, larger size)
+  // useWorker defaults to false in compressImage for compatibility
   const full = compressImage(file, {
     maxWidth: DEFAULT_MAX_WIDTH,
     maxHeight: DEFAULT_MAX_HEIGHT,
-    quality: DEFAULT_QUALITY,
-    useWorker: true
+    quality: DEFAULT_QUALITY
   });
   
   return { quick, full };

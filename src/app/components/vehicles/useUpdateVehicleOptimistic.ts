@@ -24,31 +24,21 @@ interface UseUpdateVehicleOptimisticReturn {
 // Maximum retry attempts for transient errors - ULTRA-OPTIMIZED for minimal delay
 const MAX_RETRY_ATTEMPTS = 1; // Single retry for fastest response
 const RETRY_DELAY_MS = 100; // Minimal retry delay - reduced from 300ms
-const MAX_CLOUDINARY_RETRIES = 1; // Single retry
-const CLOUDINARY_RETRY_DELAY = 100; // Minimal retry delay - reduced from 200ms
+const MAX_CLOUDINARY_RETRIES = 2; // Increased retries for direct Cloudinary upload
+const CLOUDINARY_RETRY_DELAY = 500; // Slightly longer delay for Cloudinary
 
-<<<<<<< HEAD
-// Image compression settings - optimized for speed
-const COMPRESSION_MAX_WIDTH = 800; // Reduced from 1280 for faster processing
-const COMPRESSION_QUALITY = 0.6; // Reduced from 0.75 for faster processing (0.6 = faster)
-const COMPRESSION_TIMEOUT_MS = 5000; // 5 second max for compression
-=======
 // Image compression settings - ULTRA-OPTIMIZED for speed
 const COMPRESSION_MAX_WIDTH = 800; // Optimized width
 const COMPRESSION_QUALITY = 0.7; // Optimized quality
-const COMPRESSION_TIMEOUT = 10000; // 10 second max compression time
->>>>>>> 1d6d06858edb1b454edb1607a9d8c119464b3b64
 
 // Skip compression if file is already small enough (under 800KB)
 // This prevents double compression when VehicleForm already compressed the image
 const SKIP_COMPRESSION_THRESHOLD_KB = 800;
 
-// Parallel processing settings
-const ENABLE_PARALLEL_UPLOAD = true; // Upload while compressing when possible
-
-// Server-side upload configuration - uses /api/upload endpoint
-// This keeps Cloudinary credentials secure on the server
-const UPLOAD_API_URL = '/api/upload';
+// Cloudinary configuration - CLIENT-SIDE SIGNED UPLOAD
+// These MUST be set in environment variables with NEXT_PUBLIC_ prefix
+const CLOUDINARY_CLOUD_NAME = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+const CLOUDINARY_UPLOAD_PRESET = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || "vehicle_uploads";
 
 // Helper function to delay
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -71,7 +61,29 @@ const isRetryableError = (error: Error): boolean => {
 };
 
 /**
+ * Validate Cloudinary configuration
+ */
+function validateCloudinaryConfig(): { valid: boolean; error?: string } {
+  if (!CLOUDINARY_CLOUD_NAME) {
+    return {
+      valid: false,
+      error: "Cloudinary Cloud Name is not configured. Please set NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME in your environment variables."
+    };
+  }
+  
+  if (!CLOUDINARY_UPLOAD_PRESET) {
+    return {
+      valid: false,
+      error: "Cloudinary Upload Preset is not configured. Please set NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET in your environment variables."
+    };
+  }
+  
+  return { valid: true };
+}
+
+/**
  * Upload image file to Cloudinary using unsigned upload preset with retry logic
+ * CLIENT-SIDE: Uploads directly from browser to Cloudinary (bypasses Vercel server)
  */
 async function uploadImageToCloudinaryWithRetry(
   file: File,
@@ -98,7 +110,7 @@ async function uploadImageToCloudinaryWithRetry(
       
       if (attempt <= maxRetries) {
         console.log(`[uploadImageToCloudinary] Retrying after ${CLOUDINARY_RETRY_DELAY}ms...`);
-        await delay(CLOUDINARY_RETRY_DELAY); // Fixed minimal delay - no exponential backoff
+        await delay(CLOUDINARY_RETRY_DELAY);
       }
     }
   }
@@ -107,58 +119,172 @@ async function uploadImageToCloudinaryWithRetry(
 }
 
 /**
- * Upload image file to Cloudinary via server-side API endpoint
- * This keeps Cloudinary credentials secure on the server
+ * Fetch signed upload parameters from server
+ */
+async function fetchUploadSignature(
+  folder: string,
+  publicId: string,
+  tags: string[]
+): Promise<{
+  signature: string;
+  timestamp: number;
+  api_key: string;
+  upload_preset: string;
+  folder: string;
+  public_id?: string;
+  tags?: string;
+}> {
+  const response = await fetch("/api/cloudinary-signature", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      folder,
+      public_id: publicId,
+      tags,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(
+      errorData.error || `Failed to get upload signature: ${response.status}`
+    );
+  }
+
+  const result = await response.json();
+  
+  if (!result.ok || !result.data) {
+    throw new Error(result.error || "Invalid signature response");
+  }
+
+  return result.data;
+}
+
+/**
+ * Upload image file directly to Cloudinary from the browser
+ * Uses SIGNED upload with server-generated signature
+ * This bypasses Vercel entirely and prevents 502/504 errors
+ * while keeping API secret secure on the server
  */
 async function uploadImageToCloudinary(
   file: File,
   category: string,
   vehicleId: string
 ): Promise<string> {
-  const formData = new FormData();
-  formData.append("image", file);
-  formData.append("vehicleId", vehicleId);
-  formData.append("category", category);
+  // Validate configuration first
+  const configValidation = validateCloudinaryConfig();
+  if (!configValidation.valid) {
+    throw new Error(`Configuration Error: ${configValidation.error}`);
+  }
 
-  console.log(`[uploadImageToCloudinary] Uploading via server API:`, {
-    url: UPLOAD_API_URL,
+  // Build Cloudinary upload URL
+  const cloudinaryUrl = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`;
+  
+  // Get folder based on category
+  const folder = getCloudinaryFolder(category);
+  const publicId = `vehicle_${vehicleId}_${Date.now()}`;
+  const tags = [category, "vms", "vehicle"];
+
+  console.log(`[uploadImageToCloudinary] Fetching signed upload params...`, {
+    cloudName: CLOUDINARY_CLOUD_NAME,
+    folder,
+    vehicleId,
+    category,
+  });
+
+  // Step 1: Fetch signed upload parameters from server
+  let signatureData;
+  try {
+    signatureData = await fetchUploadSignature(folder, publicId, tags);
+  } catch (error) {
+    console.error('[uploadImageToCloudinary] Failed to get signature:', error);
+    throw new Error(
+      error instanceof Error 
+        ? `Signature Error: ${error.message}` 
+        : "Failed to get upload signature"
+    );
+  }
+
+  console.log(`[uploadImageToCloudinary] Uploading directly to Cloudinary (signed):`, {
+    cloudName: CLOUDINARY_CLOUD_NAME,
+    uploadPreset: signatureData.upload_preset,
+    folder: signatureData.folder,
     vehicleId,
     category,
     fileSize: `${(file.size / 1024).toFixed(2)}KB`,
+    fileType: file.type,
+    hasSignature: !!signatureData.signature,
   });
 
-  const response = await fetch(UPLOAD_API_URL, {
-    method: "POST",
-    body: formData,
-    credentials: "include", // Include cookies for authentication
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const errorMessage = errorData.error || errorData.details || `Upload failed: ${response.status}`;
-    
-    console.error('[uploadImageToCloudinary] Server upload error:', {
-      status: response.status,
-      error: errorMessage,
-      errorData,
-    });
-    
-    throw new Error(errorMessage);
-  }
-
-  const result = await response.json();
+  // Step 2: Create form data for Cloudinary with signed params
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("upload_preset", signatureData.upload_preset);
+  formData.append("folder", signatureData.folder);
+  formData.append("public_id", signatureData.public_id || publicId);
+  formData.append("api_key", signatureData.api_key);
+  formData.append("timestamp", String(signatureData.timestamp));
+  formData.append("signature", signatureData.signature);
   
-  if (!result.ok || !result.data?.url) {
-    throw new Error("Server response missing image URL");
+  if (signatureData.tags) {
+    formData.append("tags", signatureData.tags);
   }
 
-  console.log(`[uploadImageToCloudinary] Success:`, {
-    url: result.data.url.substring(0, 100) + "...",
-    publicId: result.data.publicId,
-    folder: result.data.folder,
-  });
+  try {
+    const response = await fetch(cloudinaryUrl, {
+      method: "POST",
+      body: formData,
+      // No credentials needed for signed uploads
+    });
 
-  return result.data.url;
+    console.log(`[uploadImageToCloudinary] Cloudinary response status: ${response.status}`);
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = errorData.error?.message || 
+                          errorData.message || 
+                          `Cloudinary upload failed: ${response.status}`;
+      
+      console.error('[uploadImageToCloudinary] Cloudinary upload error:', {
+        status: response.status,
+        error: errorMessage,
+        errorData,
+      });
+      
+      // Create error with status code for retry logic
+      const error = new Error(errorMessage);
+      (error as Error & { statusCode?: number }).statusCode = response.status;
+      throw error;
+    }
+
+    const result = await response.json();
+    
+    if (!result.secure_url) {
+      console.error('[uploadImageToCloudinary] No secure_url in Cloudinary response:', result);
+      throw new Error("Cloudinary response missing secure_url");
+    }
+
+    console.log(`[uploadImageToCloudinary] Success:`, {
+      url: result.secure_url.substring(0, 100) + "...",
+      publicId: result.public_id,
+      folder: folder,
+      bytes: result.bytes,
+      format: result.format,
+    });
+
+    return result.secure_url;
+    
+  } catch (error) {
+    // Handle network errors specifically
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      console.error('[uploadImageToCloudinary] Network error:', error);
+      throw new Error(`Network error uploading to Cloudinary: ${error.message}. Please check your internet connection.`);
+    }
+    
+    throw error;
+  }
 }
 
 /**
@@ -208,32 +334,16 @@ export function useUpdateVehicleOptimistic(
       try {
         // Case A: We have a File object from file input
         if (imageFile) {
-<<<<<<< HEAD
-          const compressionStart = performance.now();
-          console.log(`[updateVehicle] [TIMING] Starting image compression at ${compressionStart.toFixed(2)}ms`);
-=======
           const fileSizeKB = imageFile.size / 1024;
->>>>>>> 1d6d06858edb1b454edb1607a9d8c119464b3b64
           
           // Skip compression if file is already small enough (prevents double compression)
           let fileToUpload: File;
           
-<<<<<<< HEAD
-          compressionTime = performance.now() - compressionStart;
-          console.log(`[updateVehicle] [TIMING] Image compression completed in ${compressionTime.toFixed(2)}ms`, {
-            originalSize: `${(imageFile.size / 1024).toFixed(2)}KB`,
-            compressedSize: `${(compressedResult.compressedSize / 1024).toFixed(2)}KB`,
-            compressionRatio: `${((1 - compressedResult.compressedSize / compressedResult.originalSize) * 100).toFixed(1)}%`,
-          });
-
-          const uploadStart = performance.now();
-          console.log(`[updateVehicle] [TIMING] Starting Cloudinary upload at ${uploadStart.toFixed(2)}ms`);
-          
-=======
           if (fileSizeKB < SKIP_COMPRESSION_THRESHOLD_KB) {
             console.log(`[updateVehicle] File already small (${fileSizeKB.toFixed(2)}KB < ${SKIP_COMPRESSION_THRESHOLD_KB}KB), skipping compression`);
             fileToUpload = imageFile;
           } else {
+            const compressionStart = performance.now();
             console.log(`[updateVehicle] Compressing image file (${fileSizeKB.toFixed(2)}KB)...`);
             
             const compressedResult = await compressImage(imageFile, {
@@ -241,16 +351,21 @@ export function useUpdateVehicleOptimistic(
               quality: COMPRESSION_QUALITY,
             });
             
+            compressionTime = performance.now() - compressionStart;
+            
             console.log(`[updateVehicle] Image compressed:`, {
               originalSize: `${(imageFile.size / 1024).toFixed(2)}KB`,
               compressedSize: `${(compressedResult.compressedSize / 1024).toFixed(2)}KB`,
+              compressionRatio: `${((1 - compressedResult.compressedSize / compressedResult.originalSize) * 100).toFixed(1)}%`,
+              compressionTime: `${compressionTime.toFixed(2)}ms`,
             });
             
             fileToUpload = compressedResult.file;
           }
 
-          console.log(`[updateVehicle] Uploading image to Cloudinary...`);
->>>>>>> 1d6d06858edb1b454edb1607a9d8c119464b3b64
+          const uploadStart = performance.now();
+          console.log(`[updateVehicle] [TIMING] Starting Cloudinary upload at ${uploadStart.toFixed(2)}ms`);
+          
           cloudinaryImageUrl = await uploadImageToCloudinaryWithRetry(
             fileToUpload,
             data.Category || originalVehicle.Category || "Cars",
@@ -379,7 +494,7 @@ export function useUpdateVehicleOptimistic(
         throw error;
       }
 
-      // Step 3: Send to API with retry logic (only for the API call, not upload)
+      // Step 4: Send to API with retry logic (only for the API call, not upload)
       let apiCallTime = 0;
       while (attempts < MAX_RETRY_ATTEMPTS) {
         attempts++;

@@ -240,6 +240,9 @@ async function handlePutRequest(
   req: NextRequest,
   params: Promise<{ id: string }>
 ) {
+  const requestStartTime = Date.now();
+  console.log(`[PUT /api/vehicles/[id]] [TIMING] Request started at ${requestStartTime}`);
+
   const session = requireSession(req);
   if (!session) {
     console.log("[PUT /api/vehicles/[id]] No session found");
@@ -346,6 +349,8 @@ async function handlePutRequest(
 
   // Update vehicle in database with timeout
   const dbStartTime = Date.now();
+  console.log(`[PUT /api/vehicles/${vehicleId}] [TIMING] Starting database update at ${dbStartTime}`);
+  
   let updatedVehicle;
   
   try {
@@ -357,11 +362,11 @@ async function handlePutRequest(
     ]);
     
     const dbDuration = Date.now() - dbStartTime;
-    console.log(`[PUT /api/vehicles/${vehicleId}] Database update completed in ${dbDuration}ms`);
+    console.log(`[PUT /api/vehicles/${vehicleId}] [TIMING] Database update completed in ${dbDuration}ms`);
   } catch (dbError) {
     const dbDuration = Date.now() - dbStartTime;
     const errorMessage = dbError instanceof Error ? dbError.message : "Unknown database error";
-    console.error(`[PUT /api/vehicles/${vehicleId}] Database update failed after ${dbDuration}ms:`, errorMessage);
+    console.error(`[PUT /api/vehicles/${vehicleId}] [TIMING] Database update failed after ${dbDuration}ms:`, errorMessage);
     
     return NextResponse.json(
       { 
@@ -391,15 +396,19 @@ async function handlePutRequest(
   });
 
   // Clear server-side cache and revalidate
+  const cacheStartTime = Date.now();
   clearCachedVehicles();
   
   // Revalidate Next.js cache tags
   try {
     revalidateTag('vehicles', {});
-    console.log(`[PUT /api/vehicles/${vehicleId}] Revalidated vehicles tag`);
+    console.log(`[PUT /api/vehicles/${vehicleId}] [TIMING] Cache revalidation completed in ${Date.now() - cacheStartTime}ms`);
   } catch (e) {
     console.error(`[PUT /api/vehicles/${vehicleId}] Failed to revalidate:`, e);
   }
+  
+  const totalRequestTime = Date.now() - requestStartTime;
+  console.log(`[PUT /api/vehicles/${vehicleId}] [TIMING] ✅ Request completed in ${totalRequestTime}ms`);
   
   return NextResponse.json({ ok: true, data: responseVehicle });
 }

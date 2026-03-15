@@ -7,7 +7,8 @@
  * Compress an image file using canvas
  * @param file - The image file to compress
  * @param maxWidth - Maximum width in pixels (default: 1200)
- * @param quality - JPEG quality 0-1 (default: 0.7)
+ * @param quality - JPEG quality 0-1 (default: 0.6 for speed)
+ * @param timeoutMs - Timeout in milliseconds (default: 5000)
  * @returns Promise with compressed file and metadata
  */
 export async function compressImage(
@@ -17,6 +18,7 @@ export async function compressImage(
     maxHeight?: number;
     quality?: number;
     type?: string;
+    timeoutMs?: number;
   } = {}
 ): Promise<{
   file: File;
@@ -27,13 +29,19 @@ export async function compressImage(
   height: number;
 }> {
   const {
-    maxWidth = 1200,
-    maxHeight = 1200,
-    quality = 0.7,
-    type = 'image/jpeg'
+    maxWidth = 800, // Reduced from 1200 for faster processing
+    maxHeight = 800, // Reduced from 1200 for faster processing
+    quality = 0.6, // Reduced from 0.7 for faster processing
+    type = 'image/jpeg',
+    timeoutMs = 5000 // 5 second default timeout
   } = options;
 
   return new Promise((resolve, reject) => {
+    // Set up timeout
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`Image compression timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
     const reader = new FileReader();
     
     reader.onload = (event) => {
@@ -56,13 +64,14 @@ export async function compressImage(
         
         const ctx = canvas.getContext('2d');
         if (!ctx) {
+          clearTimeout(timeoutId);
           reject(new Error('Failed to get canvas context'));
           return;
         }
         
-        // Use better quality scaling
+        // Use faster quality scaling (medium is faster than high)
         ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
+        ctx.imageSmoothingQuality = 'medium'; // Changed from 'high' for speed
         
         // Draw image on canvas
         ctx.drawImage(img, 0, 0, width, height);
@@ -70,6 +79,8 @@ export async function compressImage(
         // Convert to blob with compression
         canvas.toBlob(
           (blob) => {
+            clearTimeout(timeoutId); // Clear timeout on success
+            
             if (!blob) {
               reject(new Error('Failed to create blob from canvas'));
               return;
@@ -89,7 +100,8 @@ export async function compressImage(
               originalSize: `${(originalSize / 1024).toFixed(2)}KB`,
               compressedSize: `${(compressedSize / 1024).toFixed(2)}KB`,
               compressionRatio: `${compressionRatio.toFixed(1)}%`,
-              dimensions: `${width}x${height}`
+              dimensions: `${width}x${height}`,
+              quality: quality
             });
             
             resolve({
@@ -107,6 +119,7 @@ export async function compressImage(
       };
       
       img.onerror = () => {
+        clearTimeout(timeoutId);
         reject(new Error('Failed to load image for compression'));
       };
       
@@ -114,6 +127,7 @@ export async function compressImage(
     };
     
     reader.onerror = () => {
+      clearTimeout(timeoutId);
       reject(new Error('Failed to read file for compression'));
     };
     

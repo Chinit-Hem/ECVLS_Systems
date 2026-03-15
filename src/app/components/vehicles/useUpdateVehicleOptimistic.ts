@@ -29,7 +29,8 @@ const CLOUDINARY_RETRY_DELAY = 300; // Reduced from 500
 
 // Image compression settings - optimized for speed
 const COMPRESSION_MAX_WIDTH = 800; // Reduced from 1280 for faster processing
-const COMPRESSION_QUALITY = 0.7; // Reduced from 0.75 for faster processing
+const COMPRESSION_QUALITY = 0.6; // Reduced from 0.75 for faster processing (0.6 = faster)
+const COMPRESSION_TIMEOUT_MS = 5000; // 5 second max for compression
 
 // Cloudinary configuration from environment variables
 const CLOUDINARY_CLOUD_NAME = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
@@ -273,6 +274,7 @@ export function useUpdateVehicleOptimistic(
       imageFile?: File | null
     ): Promise<void> => {
       setIsUpdating(true);
+      const totalStartTime = performance.now();
 
       console.log(`[updateVehicle] Starting update for vehicle ${vehicleId}`, {
         hasImageFile: !!imageFile,
@@ -283,57 +285,71 @@ export function useUpdateVehicleOptimistic(
       let lastError: Error | null = null;
       let attempts = 0;
       let cloudinaryImageUrl: string | null = null;
+      let compressionTime = 0;
+      let uploadTime = 0;
 
       // Step 1: Handle image upload to Cloudinary (OUTSIDE retry loop - do this once)
       try {
         // Case A: We have a File object from file input
         if (imageFile) {
-          console.log(`[updateVehicle] Compressing image file...`);
+          const compressionStart = performance.now();
+          console.log(`[updateVehicle] [TIMING] Starting image compression at ${compressionStart.toFixed(2)}ms`);
           
           const compressedResult = await compressImage(imageFile, {
             maxWidth: COMPRESSION_MAX_WIDTH,
             quality: COMPRESSION_QUALITY,
           });
           
-          console.log(`[updateVehicle] Image compressed:`, {
+          compressionTime = performance.now() - compressionStart;
+          console.log(`[updateVehicle] [TIMING] Image compression completed in ${compressionTime.toFixed(2)}ms`, {
             originalSize: `${(imageFile.size / 1024).toFixed(2)}KB`,
             compressedSize: `${(compressedResult.compressedSize / 1024).toFixed(2)}KB`,
+            compressionRatio: `${((1 - compressedResult.compressedSize / compressedResult.originalSize) * 100).toFixed(1)}%`,
           });
 
-          console.log(`[updateVehicle] Uploading compressed image to Cloudinary...`);
+          const uploadStart = performance.now();
+          console.log(`[updateVehicle] [TIMING] Starting Cloudinary upload at ${uploadStart.toFixed(2)}ms`);
+          
           cloudinaryImageUrl = await uploadImageToCloudinaryWithRetry(
             compressedResult.file,
             data.Category || originalVehicle.Category || "Cars",
             vehicleId
           );
           
-          console.log(`[updateVehicle] Cloudinary upload complete:`, {
+          uploadTime = performance.now() - uploadStart;
+          console.log(`[updateVehicle] [TIMING] Cloudinary upload completed in ${uploadTime.toFixed(2)}ms`, {
             url: cloudinaryImageUrl.substring(0, 100) + "...",
           });
         }
         // Case B: We have a Base64 string in data.Image
         else if (data.Image && data.Image.startsWith("data:image/")) {
-          console.log(`[updateVehicle] Converting Base64 to File and uploading to Cloudinary...`);
+          const base64Start = performance.now();
+          console.log(`[updateVehicle] [TIMING] Starting Base64 conversion at ${base64Start.toFixed(2)}ms`);
           
           const fileFromBase64 = base64ToFile(data.Image, `vehicle_${vehicleId}_${Date.now()}.jpg`);
           
-          console.log(`[updateVehicle] Base64 converted to File:`, {
+          const base64Time = performance.now() - base64Start;
+          console.log(`[updateVehicle] [TIMING] Base64 conversion completed in ${base64Time.toFixed(2)}ms`, {
             size: `${(fileFromBase64.size / 1024).toFixed(2)}KB`,
           });
 
+          const uploadStart = performance.now();
+          console.log(`[updateVehicle] [TIMING] Starting Cloudinary upload at ${uploadStart.toFixed(2)}ms`);
+          
           cloudinaryImageUrl = await uploadImageToCloudinaryWithRetry(
             fileFromBase64,
             data.Category || originalVehicle.Category || "Cars",
             vehicleId
           );
           
-          console.log(`[updateVehicle] Cloudinary upload complete:`, {
+          uploadTime = performance.now() - uploadStart;
+          console.log(`[updateVehicle] [TIMING] Cloudinary upload completed in ${uploadTime.toFixed(2)}ms`, {
             url: cloudinaryImageUrl.substring(0, 100) + "...",
           });
         }
         // Case C: We have an existing URL in data.Image
         else if (data.Image && (data.Image.startsWith("http://") || data.Image.startsWith("https://"))) {
-          console.log(`[updateVehicle] Using existing URL:`, {
+          console.log(`[updateVehicle] Using existing URL (no upload needed):`, {
             url: data.Image.substring(0, 100) + "...",
           });
           cloudinaryImageUrl = data.Image;
@@ -423,12 +439,16 @@ export function useUpdateVehicleOptimistic(
       }
 
       // Step 3: Send to API with retry logic (only for the API call, not upload)
+      let apiCallTime = 0;
       while (attempts < MAX_RETRY_ATTEMPTS) {
         attempts++;
         
         console.log(`[updateVehicle] API call attempt ${attempts}/${MAX_RETRY_ATTEMPTS}`);
 
         try {
+          const apiStart = performance.now();
+          console.log(`[updateVehicle] [TIMING] Starting API call at ${apiStart.toFixed(2)}ms`);
+          
           const res = await fetch(`/api/vehicles/${encodeURIComponent(vehicleId)}`, {
             method: "PUT",
             headers: {
@@ -438,7 +458,8 @@ export function useUpdateVehicleOptimistic(
             credentials: "include",
           });
 
-          console.log(`[updateVehicle] API response status: ${res.status}`);
+          apiCallTime = performance.now() - apiStart;
+          console.log(`[updateVehicle] [TIMING] API call completed in ${apiCallTime.toFixed(2)}ms - Status: ${res.status}`);
 
           if (!res.ok) {
             const json = await res.json().catch(() => ({}));
@@ -454,7 +475,15 @@ export function useUpdateVehicleOptimistic(
 
           const updatedVehicle = result.data || { ...originalVehicle, ...data, Image: cloudinaryImageUrl };
           
-          console.log(`[updateVehicle] Update successful for vehicle ${vehicleId}`);
+          const totalTime = performance.now() - totalStartTime;
+          console.log(`[updateVehicle] [TIMING] ✅ Update successful for vehicle ${vehicleId}`);
+          console.log(`[updateVehicle] [TIMING] 📊 Performance Summary:`, {
+            totalTime: `${totalTime.toFixed(2)}ms`,
+            compressionTime: compressionTime > 0 ? `${compressionTime.toFixed(2)}ms` : 'N/A',
+            uploadTime: uploadTime > 0 ? `${uploadTime.toFixed(2)}ms` : 'N/A',
+            apiCallTime: `${apiCallTime.toFixed(2)}ms`,
+            hasImage: !!cloudinaryImageUrl,
+          });
 
           // Record mutation to trigger auto-refresh
           recordMutation();

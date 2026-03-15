@@ -10,7 +10,7 @@ import { CardSkeleton } from "@/app/components/LoadingSkeleton";
 import { VehicleForm } from "@/app/components/vehicles/VehicleForm";
 import { ConfirmDeleteModal } from "@/app/components/vehicles/ConfirmDeleteModal";
 import { useVehicle } from "@/app/components/vehicles/useVehicle";
-import { useUpdateVehicle } from "@/app/components/vehicles/useUpdateVehicle";
+import { useUpdateVehicleOptimistic } from "@/app/components/vehicles/useUpdateVehicleOptimistic";
 import { useDeleteVehicle } from "@/app/components/vehicles/useDeleteVehicle";
 import { useVehicles } from "@/lib/useVehicles";
 import { formatVehicleId, formatVehicleTime } from "@/lib/format";
@@ -56,7 +56,7 @@ function EditVehicleInner() {
     return { nextVehicle: next, prevVehicle: prev };
   }, [allVehicles, vehicle]);
 
-  const handleUpdateSuccess = useCallback(() => {
+  const handleUpdateSuccess = useCallback((updatedVehicle?: Vehicle) => {
     success("Vehicle updated successfully");
     // Refresh vehicle data to get the new image URL
     refetch();
@@ -71,10 +71,10 @@ function EditVehicleInner() {
     setSubmitError(err);
   }, [showError]);
 
-  const { updateVehicle, isUpdating } = useUpdateVehicle(
-    handleUpdateSuccess,
-    handleUpdateError
-  );
+  const { updateVehicle, isUpdating } = useUpdateVehicleOptimistic({
+    onSuccess: handleUpdateSuccess,
+    onError: (error) => handleUpdateError(error.message),
+  });
 
   const handleDeleteSuccess = useCallback(() => {
     success("Vehicle deleted successfully");
@@ -97,14 +97,16 @@ function EditVehicleInner() {
     
     setSubmitError(null);
     
-    const updateData = {
-      ...formData,
-      VehicleId: vehicle.VehicleId,
-    };
-    
     // Extract File from image if it's a File, otherwise pass null
     const imageFile = image instanceof File ? image : null;
-    await updateVehicle(updateData, imageFile);
+    
+    // useUpdateVehicleOptimistic expects: vehicleId, data, originalVehicle, imageFile?
+    await updateVehicle(
+      vehicle.VehicleId,
+      formData,
+      vehicle,
+      imageFile
+    );
   }, [vehicle, updateVehicle]);
 
   // Handle cancel with unsaved changes warning

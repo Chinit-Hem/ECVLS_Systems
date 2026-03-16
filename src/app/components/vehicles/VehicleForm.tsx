@@ -157,7 +157,7 @@ export function VehicleForm({
     if (vehicle.Image && typeof vehicle.Image === 'string' && vehicle.Image.startsWith('http')) {
       // Check if current formData.Image is a local blob/data URL that needs updating
       const currentImage = formData.Image;
-      if (currentImage && (currentImage.startsWith('blob:') || currentImage.startsWith('data:'))) {
+      if (currentImage && typeof currentImage === 'string' && (currentImage.startsWith('blob:') || currentImage.startsWith('data:'))) {
         console.log('[VehicleForm] Updating image from local preview to server URL:', vehicle.Image);
         setFormData(prev => ({ ...prev, Image: vehicle.Image }));
       }

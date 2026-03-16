@@ -433,7 +433,7 @@ export function VehicleDetailsCard({
       {/* Image Modal */}
       <ImageModal
         isOpen={isImageModalOpen}
-        imageUrl={displayImageUrl || vehicle.Image}
+        imageUrl={displayImageUrl || (typeof vehicle.Image === 'string' ? vehicle.Image : '')}
         alt={`${vehicle.Brand} ${vehicle.Model}`}
         onClose={() => setIsImageModalOpen(false)}
       />

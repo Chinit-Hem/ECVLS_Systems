@@ -154,12 +154,13 @@ async function fetchVehiclesFromSheet(baseUrl: string): Promise<{ vehicles: Vehi
   let total: number | null = null;
   let lastMetaOffset: number | null = null;
   const allRows: Record<string, unknown>[] = [];
-  let pageCount = 0;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _pageCount = 0;
 
   for (let page = 0; page < maxPages; page++) {
     const { rows, meta } = await fetchVehiclesPage(offset, requestedLimit);
-    // Increment page counter for tracking
-    pageCount;
+    // Page counter for tracking (intentionally unused)
+    void _pageCount;
 
     // Filter out empty rows
     const validRows = rows.filter((row) => {

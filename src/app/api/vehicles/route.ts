@@ -375,9 +375,10 @@ const postHandler = withErrorHandling(async (req, { logger, requestId, startTime
   }
   
   // Validate market price if provided
-  const marketPrice = vehicleData.market_price || vehicleData.marketPrice;
-  if (marketPrice !== undefined) {
-    const price = parseInt(marketPrice as string, 10);
+  const marketPriceRaw = vehicleData.market_price || vehicleData.marketPrice;
+  let marketPrice: number | null = null;
+  if (marketPriceRaw !== undefined && marketPriceRaw !== null && marketPriceRaw !== "") {
+    const price = parseInt(marketPriceRaw as string, 10);
     if (isNaN(price) || price < 0) {
       return createErrorResponse(
         "Invalid market price. Must be a positive number.",
@@ -387,6 +388,7 @@ const postHandler = withErrorHandling(async (req, { logger, requestId, startTime
         buildCorsHeaders(req)
       );
     }
+    marketPrice = price;
   }
   
   // Create vehicle through service layer
@@ -403,7 +405,7 @@ const postHandler = withErrorHandling(async (req, { logger, requestId, startTime
     model: vehicleData.model as string,
     year: year,
     plate: vehicleData.plate as string,
-    market_price: marketPrice ?? 0,
+    market_price: marketPrice,
     tax_type: (vehicleData.tax_type as string) || (vehicleData.taxType as string) || null,
     condition: (vehicleData.condition as "New" | "Used" | "Other") || "Other",
     body_type: (vehicleData.body_type as string) || (vehicleData.bodyType as string) || null,

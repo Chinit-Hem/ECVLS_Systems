@@ -14,7 +14,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { vehicleService } from "@/services/VehicleService";
-import { dbManager } from "@/lib/db-singleton";
 import type { VehicleFilters } from "@/services/VehicleService";
 import { withErrorHandling, createSuccessResponse, createErrorResponse } from "@/lib/api-error-wrapper";
 
@@ -338,7 +337,7 @@ const postHandler = withErrorHandling(async (req, { logger, requestId, startTime
       logger.debug("Processing JSON request", {
         fields: Object.keys(vehicleData),
       });
-    } catch (parseError) {
+    } catch {
       return createErrorResponse(
         "Invalid JSON in request body",
         requestId,

@@ -27,7 +27,7 @@ jobs:
       
       - name: Run ESLint
         # Added timeout to prevent hanging on large file sets
-        run: npm run lint
+        run: npx eslint src --ext .ts,.tsx --max-warnings 100
         timeout-minutes: 3
       
       - name: Notify Vercel

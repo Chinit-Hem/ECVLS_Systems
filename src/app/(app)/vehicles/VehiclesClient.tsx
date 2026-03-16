@@ -46,17 +46,20 @@ function IOSVehicleCard({ vehicle, isAdmin, onEdit, onDelete }: IOSVehicleCardPr
   const price40 = vehicle.Price40 ?? derived.Price40;
   const price70 = vehicle.Price70 ?? derived.Price70;
 
+  // Ensure Image is a string before using string methods
+  const imageValue = typeof vehicle.Image === 'string' ? vehicle.Image : '';
+  
   // Check if it's a full Cloudinary URL
-  const isCloudinaryUrl = vehicle.Image?.includes('res.cloudinary.com');
+  const isCloudinaryUrl = imageValue.includes('res.cloudinary.com');
   
   // Check if it's a Cloudinary public_id (not a full URL, contains folder path like "vehicles/cars/...")
-  const isCloudinaryPublicId = vehicle.Image && 
-    !vehicle.Image.startsWith('http') && 
-    !vehicle.Image.startsWith('data:') &&
-    /^[a-zA-Z0-9_\-]+(\/[a-zA-Z0-9_\-]+)*$/.test(vehicle.Image);
+  const isCloudinaryPublicId = imageValue && 
+    !imageValue.startsWith('http') && 
+    !imageValue.startsWith('data:') &&
+    /^[a-zA-Z0-9_\-]+(\/[a-zA-Z0-9_\-]+)*$/.test(imageValue);
   
   // Extract Google Drive file ID if not Cloudinary
-  const imageFileId = !isCloudinaryUrl && !isCloudinaryPublicId ? extractDriveFileId(vehicle.Image) : null;
+  const imageFileId = !isCloudinaryUrl && !isCloudinaryPublicId ? extractDriveFileId(imageValue) : null;
   
   const thumbUrl = useMemo(() => {
     if (isCloudinaryUrl) {

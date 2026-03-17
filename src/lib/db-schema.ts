@@ -4,7 +4,6 @@
 
 import { vehicleService } from "@/services/VehicleService";
 import type { VehicleDB as VehicleDBType } from "@/services/VehicleService";
-import { normalizeImageUrl } from "./cloudinary";
 
 // Re-export VehicleDB type for backward compatibility
 export type VehicleDB = VehicleDBType;
@@ -197,6 +196,35 @@ function vehicleToDB(vehicle: Record<string, unknown>): VehicleDB {
   };
 }
 
+// Helper to normalize image URL synchronously
+function normalizeImageUrlSync(imageId: string | null | undefined): string {
+  if (!imageId || typeof imageId !== "string") {
+    return "";
+  }
+
+  const trimmed = imageId.trim();
+  if (!trimmed || trimmed === "undefined" || trimmed === "null") {
+    return "";
+  }
+
+  // If it's already a valid URL, return as-is
+  if (trimmed.startsWith("http://") || 
+      trimmed.startsWith("https://") || 
+      trimmed.startsWith("data:")) {
+    return trimmed;
+  }
+
+  // If it looks like a Google Drive ID (25-44 chars, alphanumeric + _ -)
+  if (trimmed.length >= 25 && trimmed.length <= 44 && /^[a-zA-Z0-9_-]+$/.test(trimmed)) {
+    // Return Google Drive thumbnail URL
+    return `https://drive.google.com/thumbnail?id=${encodeURIComponent(trimmed)}&sz=w800-h600`;
+  }
+
+  // Assume it's a Cloudinary public_id - construct URL
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME || "demo";
+  return `https://res.cloudinary.com/${cloudName}/image/upload/${trimmed}`;
+}
+
 // Convert DB vehicle format to API vehicle format
 export function toVehicle(dbVehicle: VehicleDB): Record<string, unknown> {
   const priceNew = typeof dbVehicle.market_price === 'string' 
@@ -216,7 +244,7 @@ export function toVehicle(dbVehicle: VehicleDB): Record<string, unknown> {
   );
   const normalizedImage = hasValidThumbnail 
     ? thumbnailUrl 
-    : normalizeImageUrl(dbVehicle.image_id);
+    : normalizeImageUrlSync(dbVehicle.image_id);
   
   return {
     VehicleId: String(dbVehicle.id),

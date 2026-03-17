@@ -102,6 +102,7 @@ export type Vehicle = {
   Condition: string;
   BodyType: string;
   Color: string;
+  // Image is always normalized to a string (Google Sheets arrays are converted)
   Image: string;
   Time: string;
   _deleted?: boolean;

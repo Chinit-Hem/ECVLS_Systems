@@ -63,15 +63,16 @@ function IOSVehicleCard({ vehicle, isAdmin, onEdit, onDelete }: IOSVehicleCardPr
   
   const thumbUrl = useMemo(() => {
     if (isCloudinaryUrl) {
-      // Use full Cloudinary URL directly
-      return vehicle.Image;
+      // Use full Cloudinary URL directly - ensure it's a string
+      return typeof vehicle.Image === 'string' ? vehicle.Image : '';
     }
     
     if (isCloudinaryPublicId && vehicle.Image) {
       // Convert public_id to full Cloudinary URL
       // URL format: https://res.cloudinary.com/{cloud}/image/upload/{public_id}
       const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || 'dgntrakv6';
-      return `https://res.cloudinary.com/${cloudName}/image/upload/${vehicle.Image}`;
+      const publicId = typeof vehicle.Image === 'string' ? vehicle.Image : '';
+      return `https://res.cloudinary.com/${cloudName}/image/upload/${publicId}`;
     }
     
     // Try Google Drive

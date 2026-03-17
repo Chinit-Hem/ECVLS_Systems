@@ -5,13 +5,15 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useAuthUser } from "@/app/components/AuthContext";
 import { VehicleDetailsCard } from "@/app/components/vehicles/VehicleDetailsCard";
 import { ConfirmDeleteModal } from "@/app/components/vehicles/ConfirmDeleteModal";
+import { VehicleForm } from "@/app/components/vehicles/VehicleForm";
 import { GlassCard } from "@/app/components/ui/GlassCard";
 import { useToast } from "@/app/components/ui/GlassToast";
 import { CardSkeleton } from "@/app/components/LoadingSkeleton";
 import { extractDriveFileId } from "@/lib/drive";
-import { refreshVehicleCache, onVehicleCacheUpdate } from "@/lib/vehicleCache";
+import { refreshVehicleCache, onVehicleCacheUpdate, writeVehicleCache } from "@/lib/vehicleCache";
 import type { Vehicle } from "@/lib/types";
 import { useMounted } from "@/lib/useMounted";
+import { derivePrices } from "@/lib/pricing";
 
 // Force text visibility in dark mode - inline styles for immediate effect
 const forceTextVisibleStyles = `
@@ -73,6 +75,8 @@ function ViewVehicleInner() {
   const [error, setError] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Determine user role
   const userRole = user?.role || "Viewer";
@@ -217,23 +221,67 @@ function ViewVehicleInner() {
     return onVehicleCacheUpdate((vehicles) => {
       const updatedVehicle = vehicles.find((v) => v.VehicleId === id);
       if (updatedVehicle) {
-        console.log("[VIEW_VEHICLE] Cache updated, refreshing vehicle:", updatedVehicle.VehicleId);
-        console.log("[VIEW_VEHICLE] New image URL:", updatedVehicle.Image?.substring(0, 100));
         setVehicle(updatedVehicle);
       }
     });
   }, [id]);
 
-  // Debug: Log vehicle image changes
-  useEffect(() => {
-    if (vehicle) {
-      console.log("[VIEW_VEHICLE] Vehicle updated:", {
-        id: vehicle.VehicleId,
-        hasImage: !!vehicle.Image,
-        imageUrl: vehicle.Image?.substring(0, 100)
+
+  // Handle save/edit
+  const handleSave = useCallback(async (formData: Vehicle & { imageFile?: File | null }) => {
+    if (!vehicle) return;
+    
+    setIsSaving(true);
+    try {
+      const { imageFile, ...vehicleData } = formData;
+      
+      // Derive prices if not provided
+      const priceNew = vehicleData.PriceNew ?? vehicle.PriceNew;
+      const derived = derivePrices(priceNew);
+      
+      const payload = {
+        ...vehicleData,
+        Price40: vehicleData.Price40 ?? derived.Price40,
+        Price70: vehicleData.Price70 ?? derived.Price70,
+        imageFile: imageFile ?? null,
+      };
+
+      const res = await fetch(`/api/vehicles/${encodeURIComponent(vehicle.VehicleId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
       });
+
+      if (res.status === 401) {
+        router.push("/login?redirect=" + encodeURIComponent(window.location.pathname));
+        return;
+      }
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok === false) {
+        throw new Error(json.error || "Failed to update vehicle");
+      }
+
+      const updatedVehicle = json.data || json.vehicle;
+      
+      // Update local state
+      setVehicle(updatedVehicle);
+      
+      // Update cache
+      await writeVehicleCache([updatedVehicle]);
+      await refreshVehicleCache();
+      
+      showSuccess("Vehicle updated successfully");
+      setIsEditModalOpen(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Update failed";
+      showError(message);
+      throw err; // Re-throw so the form can display the error
+    } finally {
+      setIsSaving(false);
     }
-  }, [vehicle?.Image, vehicle?.VehicleId]);
+  }, [vehicle, router, showSuccess, showError]);
 
   // Handle delete
   const handleDelete = useCallback(async () => {
@@ -395,8 +443,10 @@ function ViewVehicleInner() {
         <div className="max-w-6xl mx-auto" style={{ color: '#f8fafc' }}>
           <div className="vehicle-details-container" style={{ color: '#f8fafc' }}>
             <VehicleDetailsCard
+              key={vehicle.VehicleId + (vehicle.Image ? '-has-image' : '-no-image')}
               vehicle={vehicle}
               userRole={userRole}
+              onEdit={() => setIsEditModalOpen(true)}
               onDelete={async () => { setIsDeleteModalOpen(true); }}
               isDeleting={isDeleting}
             />
@@ -412,6 +462,22 @@ function ViewVehicleInner() {
           onConfirm={handleDelete}
           onCancel={() => setIsDeleteModalOpen(false)}
         />
+
+        {/* Edit Modal */}
+        {isEditModalOpen && (
+          <VehicleForm
+            vehicle={vehicle}
+            onSubmit={async (formData, imageFile) => {
+              await handleSave({ ...formData, imageFile } as Vehicle & { imageFile?: File | null });
+            }}
+            onCancel={() => setIsEditModalOpen(false)}
+            isSubmitting={isSaving}
+            submitError={null}
+            onClearError={() => {}}
+            isModal={true}
+            modalTitle="Edit Vehicle"
+          />
+        )}
       </div>
     </>
   );

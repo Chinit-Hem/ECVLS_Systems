@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { GlassField } from "../ui/GlassField";
 import { SectionCard } from "../ui/SectionCard";
 import { GlassButton } from "../ui/GlassButton";
@@ -8,7 +8,6 @@ import { ImageInput } from "../ui/ImageInput";
 import { formatCurrency } from "@/lib/format";
 import { derivePrices } from "@/lib/pricing";
 import { formatFileSize as formatImageSize } from "@/lib/compressImage";
-import { fileToDataUrl } from "@/lib/fileToDataUrl";
 // Note: processImageForUpload and compressImage available if needed for advanced compression
 // import { processImageForUpload, compressImage } from "@/lib/clientImageCompression";
 import type { Vehicle } from "@/lib/types";
@@ -141,14 +140,21 @@ export function VehicleForm({
   // Track changes
   const hasChanges = JSON.stringify(formData) !== JSON.stringify(vehicle) || uploadedImage !== null;
 
+  // Use a ref to track if this is the initial mount or vehicle prop change
+  const prevVehicleRef = useRef(vehicle);
+  
   // Update form when vehicle changes
   useEffect(() => {
-    setFormData(vehicle);
-    setUploadedImage(null);
-    setErrors({});
-    setTouched({});
-    // Clear compressed preview when vehicle changes
-    setCompressedPreview(null);
+    // Only update if vehicle prop actually changed (not on initial mount)
+    if (prevVehicleRef.current !== vehicle) {
+      prevVehicleRef.current = vehicle;
+      setFormData(vehicle);
+      setUploadedImage(null);
+      setErrors({});
+      setTouched({});
+      // Clear compressed preview when vehicle changes
+      setCompressedPreview(null);
+    }
   }, [vehicle]); // Re-initialize when vehicle changes
 
   // Effect to handle image URL updates from server after save
@@ -159,7 +165,10 @@ export function VehicleForm({
       const currentImage = formData.Image;
       if (currentImage && typeof currentImage === 'string' && (currentImage.startsWith('blob:') || currentImage.startsWith('data:'))) {
         console.log('[VehicleForm] Updating image from local preview to server URL:', vehicle.Image);
-        setFormData(prev => ({ ...prev, Image: vehicle.Image }));
+        // Use a microtask to avoid synchronous setState during render
+        Promise.resolve().then(() => {
+          setFormData(prev => ({ ...prev, Image: vehicle.Image }));
+        });
       }
     }
   }, [vehicle.Image, formData.Image]);
@@ -276,53 +285,13 @@ export function VehicleForm({
     return isValid;
   }, [formData, validateField]);
 
-  // Handle image file upload - ONLY method now
-  // Note: This function is kept for future use but currently handled by ImageInput component
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const _handleImageFile = useCallback(async (file: File | null) => {
-    if (!file) return;
-    
-    if (!file.type.startsWith("image/")) {
-      setErrors((prev) => ({ ...prev, Image: "Please select an image file" }));
-      return;
-    }
-    
-    if (file.size > 5 * 1024 * 1024) {
-      setErrors((prev) => ({ ...prev, Image: "Image too large (max 5MB)" }));
-      return;
-    }
-
-    setImageLoading(true);
-    setErrors((prev) => ({ ...prev, Image: "" }));
-    
-    try {
-      // For large files (>1MB), use object URL to avoid memory issues
-      // For smaller files, use data URL for preview
-      let previewUrl: string;
-      if (file.size > 1024 * 1024) {
-        previewUrl = URL.createObjectURL(file);
-      } else {
-        previewUrl = await fileToDataUrl(file);
-      }
-      
-      setFormData((prev) => ({ ...prev, Image: previewUrl }));
-      setUploadedImage(file);
-    } catch (err) {
-      setErrors((prev) => ({ 
-        ...prev, 
-        Image: err instanceof Error ? err.message : "Failed to load image" 
-      }));
-    } finally {
-      setImageLoading(false);
-    }
-  }, []);
 
   // Cleanup object URLs to prevent memory leaks
   useEffect(() => {
     return () => {
       // Cleanup any object URLs when component unmounts
       const currentImage = formData.Image;
-      if (currentImage && currentImage.startsWith("blob:")) {
+      if (typeof currentImage === 'string' && currentImage.startsWith("blob:")) {
         URL.revokeObjectURL(currentImage);
       }
     };
@@ -391,7 +360,7 @@ export function VehicleForm({
     let submitData: Partial<Vehicle>;
     if (imageFile) {
       // File upload case - exclude Image field entirely
-      const { Image, ...formDataWithoutImage } = formData;
+      const { Image: _Image, ...formDataWithoutImage } = formData;
       submitData = formDataWithoutImage;
       console.log("[VehicleForm] Excluding Image field for file upload");
     } else if (imageUrl) {
@@ -414,7 +383,7 @@ export function VehicleForm({
     });
     
     await onSubmit(sanitizedSubmitData, imageFile);
-  }, [formData, uploadedImage, onSubmit, validateForm]);
+  }, [formData, uploadedImage, onSubmit, validateForm, dataUrlToFile]);
 
   // Handle remove image
   const handleRemoveImage = useCallback(() => {

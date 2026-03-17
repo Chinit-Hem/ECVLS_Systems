@@ -31,6 +31,7 @@ function VehicleDetailInner() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Determine user role
   const userRole = user?.role || "Viewer";
@@ -180,7 +181,7 @@ function VehicleDetailInner() {
         cloudinaryImageUrl = uploadData.secure_url;
         
         console.log(`[handleSave] Image uploaded to Cloudinary:`, {
-          url: cloudinaryImageUrl?.substring(0, 100) + "..."
+          url: typeof cloudinaryImageUrl === 'string' ? cloudinaryImageUrl.substring(0, 100) + "..." : String(cloudinaryImageUrl)
         });
       }
 
@@ -202,7 +203,7 @@ function VehicleDetailInner() {
 
       console.log(`[handleSave] Sending update to API:`, {
         hasImage: !!cloudinaryImageUrl,
-        imageUrl: cloudinaryImageUrl?.substring(0, 100) + "..."
+        imageUrl: typeof cloudinaryImageUrl === 'string' ? cloudinaryImageUrl.substring(0, 100) + "..." : String(cloudinaryImageUrl)
       });
 
       const res = await fetch(`/api/vehicles/${encodeURIComponent(vehicle.VehicleId)}`, {
@@ -239,7 +240,7 @@ function VehicleDetailInner() {
       console.log("[VehicleDetailPage] Vehicle updated:", {
         id: updatedVehicle.VehicleId,
         hasImage: !!updatedVehicle.Image,
-        imageUrl: updatedVehicle.Image?.substring(0, 100)
+        imageUrl: typeof updatedVehicle.Image === 'string' ? updatedVehicle.Image.substring(0, 100) : String(updatedVehicle.Image)
       });
       
       setVehicle(updatedVehicle);
@@ -270,7 +271,8 @@ function VehicleDetailInner() {
       // Show success toast (you can integrate with your toast system)
       // toast.success("Vehicle updated successfully");
     } catch (err) {
-      alert(`Failed to save vehicle: ${err instanceof Error ? err.message : "Unknown error"}`);
+      const errorMessage = err instanceof Error ? err.message : "Unknown error";
+      setSubmitError(`Failed to save vehicle: ${errorMessage}`);
     } finally {
       setIsSaving(false);
     }
@@ -401,8 +403,8 @@ function VehicleDetailInner() {
           }}
           onCancel={() => setIsEditModalOpen(false)}
           isSubmitting={isSaving}
-          submitError={null}
-          onClearError={() => {}}
+          submitError={submitError}
+          onClearError={() => setSubmitError(null)}
           isModal={true}
           modalTitle="Edit Vehicle"
         />

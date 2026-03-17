@@ -16,7 +16,7 @@
 
 "use client";
 
-import React, { useCallback, useMemo } from "react";
+import React, { useMemo } from "react";
 import { useVehicleForm, type Vehicle, type UseVehicleFormOptions } from "@/lib/useVehicleForm";
 import { GlassField } from "../ui/GlassField";
 import { SectionCard } from "../ui/SectionCard";
@@ -488,7 +488,6 @@ export function VehicleFormUnified({
     handleRemoveImage,
     validateForm,
     handleSubmit,
-    clearError,
   } = useVehicleForm(hookOptions);
   
   // Clear external error when form changes

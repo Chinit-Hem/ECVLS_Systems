@@ -197,8 +197,23 @@ function vehicleToDB(vehicle: Record<string, unknown>): VehicleDB {
 }
 
 // Helper to normalize image URL synchronously
-function normalizeImageUrlSync(imageId: string | null | undefined): string {
-  if (!imageId || typeof imageId !== "string") {
+// Handles both single strings and arrays (takes first element from array)
+function normalizeImageUrlSync(imageId: string | string[] | null | undefined): string {
+  // Handle null/undefined
+  if (!imageId) {
+    return "";
+  }
+
+  // If it's an array, take the first element
+  if (Array.isArray(imageId)) {
+    if (imageId.length === 0) {
+      return "";
+    }
+    imageId = imageId[0];
+  }
+
+  // Now it should be a string
+  if (typeof imageId !== "string") {
     return "";
   }
 

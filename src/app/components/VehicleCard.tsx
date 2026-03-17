@@ -32,25 +32,30 @@ export default function VehicleCard({
   const price40 = vehicle.Price40 ?? derived.Price40;
   const price70 = vehicle.Price70 ?? derived.Price70;
 
+  // Get the image URL (handle arrays from Google Sheets)
+  const imageUrl = Array.isArray(vehicle.Image) 
+    ? (vehicle.Image[0] || '') 
+    : (vehicle.Image || '');
+  
   // Check if it's a Cloudinary URL first (guard against "undefined" string)
-  const isCloudinary = typeof vehicle.Image === 'string' && 
-    vehicle.Image !== 'undefined' && 
-    vehicle.Image !== 'null' &&
-    vehicle.Image.includes('res.cloudinary.com');
+  const isCloudinary = typeof imageUrl === 'string' && 
+    imageUrl !== 'undefined' && 
+    imageUrl !== 'null' &&
+    imageUrl.includes('res.cloudinary.com');
   
   // Use useMemo to avoid calling Date.now() during render (impure function)
   const thumbUrl = useMemo(() => {
     if (isCloudinary) {
       // Use Cloudinary URL directly
-      return vehicle.Image;
+      return imageUrl;
     }
     
     // Try Google Drive
-    const imageFileId = extractDriveFileId(vehicle.Image);
+    const imageFileId = extractDriveFileId(imageUrl);
     return imageFileId
       ? `${driveThumbnailUrl(imageFileId, "w300-h300")}`
-      : vehicle.Image;
-  }, [isCloudinary, vehicle.Image]);
+      : imageUrl;
+  }, [isCloudinary, imageUrl]);
 
 
   const handleClick = () => {

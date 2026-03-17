@@ -470,9 +470,13 @@ export default function Dashboard({
     ].filter((item) => item.value > 0);
   }, [meta]);
 
+  // Filter out invalid/placeholder brands that aren't real vehicle brands
+  const INVALID_BRANDS = ['DIRECT_DB', 'TEST', 'UNKNOWN', 'N/A', 'NULL', 'NONE', ''];
+
   const brandChartData = useMemo(() => {
     if (!aggregatedStats) return [];
     return Object.entries(aggregatedStats.byBrand)
+      .filter(([name]) => !INVALID_BRANDS.includes(name))
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 10);
@@ -642,7 +646,12 @@ export default function Dashboard({
       {/* Search Results Count */}
       <div className="flex flex-wrap items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
         <span>
-          Showing {filteredVehicles.length.toLocaleString()} of {vehicles.length.toLocaleString()} vehicles
+          Showing {filteredVehicles.length.toLocaleString()} of {meta.total.toLocaleString()} vehicles
+          {vehicles.length < meta.total && (
+            <span className="text-amber-600 dark:text-amber-400 ml-1">
+              (displaying first {vehicles.length})
+            </span>
+          )}
         </span>
         {debouncedSearch && (
           <span>
@@ -714,36 +723,34 @@ export default function Dashboard({
       </div>
 
       {/* ============================================================================
-          Quick Stats Footer
+          Quick Stats Footer - Use meta for accurate totals, aggregatedStats for derived metrics
       ============================================================================ */}
-      {aggregatedStats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-          <div className="text-center">
-            <p className="text-2xl sm:text-3xl font-bold text-emerald-600 dark:text-emerald-400">
-              {aggregatedStats.withImages.toLocaleString()}
-            </p>
-            <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">With Images</p>
-          </div>
-          <div className="text-center">
-            <p className="text-2xl sm:text-3xl font-bold text-red-600 dark:text-red-400">
-              {aggregatedStats.withoutImages.toLocaleString()}
-            </p>
-            <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">Without Images</p>
-          </div>
-          <div className="text-center">
-            <p className="text-2xl sm:text-3xl font-bold text-blue-600 dark:text-blue-400">
-              ${Math.round(aggregatedStats.totalValue / (vehicles.length || 1)).toLocaleString()}
-            </p>
-            <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">Avg Price</p>
-          </div>
-          <div className="text-center">
-            <p className="text-2xl sm:text-3xl font-bold text-purple-600 dark:text-purple-400">
-              {Object.keys(aggregatedStats.byBrand).length}
-            </p>
-            <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">Unique Brands</p>
-          </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <div className="text-center">
+          <p className="text-2xl sm:text-3xl font-bold text-emerald-600 dark:text-emerald-400">
+            {(meta.total - meta.noImageCount).toLocaleString()}
+          </p>
+          <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">With Images</p>
         </div>
-      )}
+        <div className="text-center">
+          <p className="text-2xl sm:text-3xl font-bold text-red-600 dark:text-red-400">
+            {meta.noImageCount.toLocaleString()}
+          </p>
+          <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">Without Images</p>
+        </div>
+        <div className="text-center">
+          <p className="text-2xl sm:text-3xl font-bold text-blue-600 dark:text-blue-400">
+            ${Math.round(meta.avgPrice).toLocaleString()}
+          </p>
+          <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">Avg Price</p>
+        </div>
+        <div className="text-center">
+          <p className="text-2xl sm:text-3xl font-bold text-purple-600 dark:text-purple-400">
+            {aggregatedStats ? Object.keys(aggregatedStats.byBrand).length : '-'}
+          </p>
+          <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">Unique Brands (sample)</p>
+        </div>
+      </div>
     </div>
   );
 }

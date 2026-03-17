@@ -4,6 +4,14 @@ import type { Vehicle } from "@/lib/types";
 function toStringValue(value: unknown): string {
   if (typeof value === "string") return value;
   if (value == null) return "";
+  // Handle arrays - take first element if array (Google Sheets sometimes returns arrays)
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "";
+    const first = value[0];
+    if (typeof first === "string") return first;
+    if (first == null) return "";
+    return String(first);
+  }
   return String(value);
 }
 
@@ -26,6 +34,11 @@ export function parseImageDataUrl(
 
 function toNumberOrNull(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  // Handle arrays - take first element if array (Google Sheets sometimes returns arrays)
+  if (Array.isArray(value)) {
+    if (value.length === 0) return null;
+    return toNumberOrNull(value[0]);
+  }
   if (typeof value !== "string") return null;
 
   const trimmed = value.trim();

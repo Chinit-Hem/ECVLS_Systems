@@ -57,25 +57,76 @@ export function VehicleDetailsCard({
   };
 
   // Helper to get proper image URL (handle Google Drive and Cloudinary URLs)
-  const getImageUrl = (imageUrl: string | undefined): string | null => {
-    // Type guard: ensure imageUrl is a string before using string methods
-    if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.trim()) return null;
+  // Also handles arrays from Google Sheets cached data
+  const getImageUrl = (imageUrl: unknown): string | null => {
+    // Log the raw input for debugging
+    console.log('[VehicleDetailsCard] getImageUrl raw input:', { 
+      type: typeof imageUrl, 
+      isArray: Array.isArray(imageUrl),
+      isNull: imageUrl === null,
+      constructor: imageUrl?.constructor?.name
+    });
     
-    // Check if it's a Cloudinary URL (guard against "undefined" string)
-    if (imageUrl !== 'undefined' && imageUrl !== 'null' && imageUrl.includes('res.cloudinary.com')) {
-      // Return Cloudinary URL as-is for Next.js Image component
-      return imageUrl;
+    // Handle null/undefined
+    if (imageUrl === null || imageUrl === undefined) {
+      console.log('[VehicleDetailsCard] Null/undefined input');
+      return null;
+    }
+    
+    // Handle arrays - take first element if array (Google Sheets sometimes returns arrays)
+    let url: string;
+    if (Array.isArray(imageUrl)) {
+      if (imageUrl.length === 0) {
+        console.log('[VehicleDetailsCard] Empty array, returning null');
+        return null;
+      }
+      // Get first element and ensure it's a string
+      const firstElement = imageUrl[0];
+      if (typeof firstElement !== 'string') {
+        console.log('[VehicleDetailsCard] First array element is not a string:', typeof firstElement);
+        return null;
+      }
+      url = firstElement;
+      console.log('[VehicleDetailsCard] Extracted from array:', url.substring(0, 100));
+    } else if (typeof imageUrl === 'string') {
+      url = imageUrl;
+    } else {
+      // Handle objects or other types - try to convert to string or return null
+      console.log('[VehicleDetailsCard] Unexpected type, attempting toString');
+      try {
+        url = String(imageUrl);
+        if (url === '[object Object]' || url === 'undefined' || url === 'null') {
+          console.log('[VehicleDetailsCard] Invalid toString result:', url);
+          return null;
+        }
+      } catch {
+        return null;
+      }
+    }
+    
+    // Type guard: ensure url is a valid string
+    if (!url || typeof url !== 'string' || !url.trim() || url === 'undefined' || url === 'null') {
+      console.log('[VehicleDetailsCard] Invalid URL after processing:', url);
+      return null;
+    }
+    
+    // Check if it's a Cloudinary URL
+    if (url.includes('res.cloudinary.com')) {
+      console.log('[VehicleDetailsCard] Cloudinary URL detected');
+      return url;
     }
     
     // Check if it's a Google Drive URL
-    const fileId = extractDriveFileId(imageUrl);
+    const fileId = extractDriveFileId(url);
     if (fileId) {
+      console.log('[VehicleDetailsCard] Google Drive fileId:', fileId);
       // Use larger thumbnail for detail view
       return driveThumbnailUrl(fileId, "w800-h600");
     }
     
+    console.log('[VehicleDetailsCard] Returning URL as-is:', url.substring(0, 100));
     // Return as-is for other URLs
-    return imageUrl;
+    return url;
   };
 
   const displayImageUrl = getImageUrl(vehicle.Image);
@@ -433,7 +484,7 @@ export function VehicleDetailsCard({
       {/* Image Modal */}
       <ImageModal
         isOpen={isImageModalOpen}
-        imageUrl={displayImageUrl || (typeof vehicle.Image === 'string' ? vehicle.Image : '')}
+        imageUrl={displayImageUrl || (Array.isArray(vehicle.Image) ? vehicle.Image[0] : typeof vehicle.Image === 'string' ? vehicle.Image : '')}
         alt={`${vehicle.Brand} ${vehicle.Model}`}
         onClose={() => setIsImageModalOpen(false)}
       />

@@ -110,6 +110,7 @@ export function useVehicleForm(options: UseVehicleFormOptions): UseVehicleFormRe
   const submitAttemptedRef = useRef(false);
   
   // Update form when initial vehicle changes (but not on every render)
+  // We intentionally only check VehicleId to avoid unnecessary resets
   useEffect(() => {
     if (initialVehicle.VehicleId !== initialVehicleRef.current.VehicleId) {
       setFormData(initialVehicle);
@@ -119,8 +120,9 @@ export function useVehicleForm(options: UseVehicleFormOptions): UseVehicleFormRe
       initialVehicleRef.current = initialVehicle;
       submitAttemptedRef.current = false;
     }
+    // Only depend on VehicleId, not the entire initialVehicle object
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialVehicle]);
+  }, [initialVehicle.VehicleId]);
   
   // Compute derived prices
   const derivedPrices = useMemo(() => {

@@ -2,8 +2,6 @@
 
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, History, Search, Loader2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useState, useEffect } from 'react';
 
 interface SmsAsset {
@@ -29,7 +27,7 @@ export default function HistoryPage() {
       const res = await fetch('/api/sms/assets');
       const data = await res.json();
       if (data.success) {
-        setAssets(data.data.slice(0, 20)); // Top 20 assets
+        setAssets(data.data.slice(0, 20));
       }
     } catch (e) {}
   };
@@ -55,14 +53,12 @@ export default function HistoryPage() {
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <div className="flex items-center gap-4 mb-8">
-        <Button 
-          variant="ghost" 
-          size="icon" 
+        <button 
           onClick={() => router.back()} 
-          className="hover:bg-slate-100 h-12 w-12 p-0"
+          className="p-3 rounded-xl hover:bg-slate-100 h-12 w-12 flex items-center justify-center transition-colors"
         >
           <ArrowLeft className="h-6 w-6" />
-        </Button>
+        </button>
         <div>
           <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-purple-700 bg-clip-text text-transparent mb-2 flex items-center gap-3">
             <History className="h-8 w-8" />
@@ -79,21 +75,24 @@ export default function HistoryPage() {
               <Search className="h-6 w-6 text-slate-400" />
               <h3 className="font-bold text-xl">Select Asset</h3>
             </div>
-            <Select value={selectedAsset} onValueChange={(id) => {
-              setSelectedAsset(id);
-              if (id) fetchHistory(id);
-            }}>
-              <SelectTrigger className="w-full h-14">
-                <SelectValue placeholder="Choose asset to view history..." />
-              </SelectTrigger>
-              <SelectContent className="max-h-96 overflow-auto">
+            <div className="w-full">
+              <select 
+                value={selectedAsset} 
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setSelectedAsset(id);
+                  if (id) fetchHistory(id);
+                }}
+                className="w-full p-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white shadow-sm h-14"
+              >
+                <option value="">Choose asset to view history...</option>
                 {assets.map((asset) => (
-                  <SelectItem key={asset.id} value={asset.id}>
+                  <option key={asset.id} value={asset.id}>
                     {asset.name} ({asset.status})
-                  </SelectItem>
+                  </option>
                 ))}
-              </SelectContent>
-            </Select>
+              </select>
+            </div>
           </div>
 
           {history && (
@@ -115,9 +114,12 @@ export default function HistoryPage() {
           {error && (
             <div className="bg-red-50 border border-red-200 rounded-3xl p-8 text-center">
               <p className="text-red-600 font-medium">{error}</p>
-              <Button onClick={() => selectedAsset && fetchHistory(selectedAsset)} className="mt-4">
+              <button 
+                onClick={() => selectedAsset && fetchHistory(selectedAsset)} 
+                className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-xl font-medium transition-colors mt-4"
+              >
                 Retry
-              </Button>
+              </button>
             </div>
           )}
           {!selectedAsset && !loading && !error && (
@@ -175,4 +177,7 @@ export default function HistoryPage() {
     </div>
   );
 }
+
+
+
 

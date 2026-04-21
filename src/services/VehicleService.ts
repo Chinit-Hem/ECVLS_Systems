@@ -236,9 +236,9 @@ export class VehicleService extends BaseService<VehicleEntity, VehicleDB> {
     const conditions: string[] = [];
     let paramIndex = 1;
 
-    // Filter for vehicles without images (NULL or empty string for both image_id and thumbnail_url)
+    // Filter for vehicles without images - MATCHES stats query exactly
     if (filters?.withoutImage === true) {
-      conditions.push(`((image_id IS NULL OR image_id = '') AND (thumbnail_url IS NULL OR thumbnail_url = ''))`);
+      conditions.push(`(image_id IS NULL OR TRIM(image_id) = '')`);
     }
 
     // Category filter - use direct ILIKE without LOWER/TRIM for better performance

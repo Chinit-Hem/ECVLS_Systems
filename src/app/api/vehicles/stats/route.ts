@@ -4,7 +4,7 @@
 import { vehicleService } from "@/services/VehicleService";
 import { NextRequest, NextResponse } from "next/server";
 
-export const runtime = "edge";
+export const dynamic = 'force-dynamic';
 
 const EMPTY_STATS = {
   total: 0,
@@ -49,11 +49,17 @@ export async function GET(_req: NextRequest) {
       unaccountedByCategory: Math.max(0, stats.total - categoryTotal),
     });
     
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: result.success,
       data: stats,
       meta: result.meta
     });
+    
+    response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+    response.headers.set('Pragma', 'no-cache');
+    response.headers.set('Expires', '0');
+    
+    return response;
   } catch (error) {
     console.error("[API /vehicles/stats] Error:", error);
     return NextResponse.json({
@@ -62,4 +68,3 @@ export async function GET(_req: NextRequest) {
     }, { status: 500 });
   }
 }
-
